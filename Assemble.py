@@ -1,10 +1,15 @@
+import os
+import sys
+import json
 
 import luigi
-from luigi.util import requires
+from luigi.util import requires, inherits
 from luigi import LocalTarget
 
-from fieldpathogenomics.luigi.slurm import SlurmExecutableTask, SlurmTask
-from fieldpathogenomics.utils import CheckTargetNonEmpty,
+from fieldpathogenomics.luigi.slurm import SlurmExecutableTask
+from fieldpathogenomics.utils import CheckTargetNonEmpty
+import fieldpathogenomics.utils as utils
+
 
 PIPELINE = os.path.basename(__file__).split('.')[0]
 VERSION = '0.0'
@@ -213,6 +218,7 @@ class PerLibPipeline(luigi.WrapperTask):
     def output(self):
         return self.input()
 
+
 @inherits(PerLibPipeline)
 class LibraryBatchWrapper(luigi.WrapperTask):
     '''Wrapper task to execute the per library part of the pipeline on all
@@ -228,6 +234,7 @@ class LibraryBatchWrapper(luigi.WrapperTask):
 
 # ----------------------------------------------------------------------- #
 
+
 if __name__ == '__main__':
     os.environ['TMPDIR'] = "/tgac/scratch/buntingd"
     logger, alloc_log = utils.logging_init(log_dir=os.path.join(os.getcwd(), 'logs'),
@@ -238,4 +245,3 @@ if __name__ == '__main__':
 
     luigi.run(['LibraryBatchWrapper',
                '--lib-list', json.dumps(lib_list)] + sys.argv[2:])
-
