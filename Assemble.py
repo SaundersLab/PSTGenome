@@ -184,7 +184,7 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
         self.mem = 4000
-        self.n_cpu = 8
+        self.n_cpu = 4
         self.partition = "tgac-medium"
 
     def output(self):
