@@ -82,7 +82,7 @@ class Trimmomatic(CheckTargetNonEmpty, SlurmExecutableTask):
                mv {log}.temp {log}
 
                 '''.format(scratch_dir=os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library),
-                           trimmomatic=trimmomatic.format(
+                           trimmomatic=utils.trimmomatic.format(
                                mem=self.mem * self.n_cpu),
                            log=self.output()[2].path,
                            library=self.library,
