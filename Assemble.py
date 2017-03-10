@@ -198,7 +198,7 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     kat hist -o {output_prefix} -t {n_cpu} <(zcat {R1} {R2})
 
-        '''.format(output_prefix=self.library + '.hist',
+        '''.format(output_prefix=self.output()[0].path,
                    n_cpu=self.n_cpu,
                    R1=self.input()[0].path,
                    R2=self.input()[1].path)
