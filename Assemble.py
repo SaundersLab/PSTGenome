@@ -100,7 +100,7 @@ class FastxQC(SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 2000
+        self.mem = 3000
         self.n_cpu = 1
         self.partition = "tgac-medium"
 
@@ -144,7 +144,7 @@ class FastQC(CheckTargetNonEmpty, SlurmExecutableTask):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             # Set the SLURM request params for this task
-            self.mem = 2000
+            self.mem = 3000
             self.n_cpu = 1
             self.partition = "tgac-medium"
 
