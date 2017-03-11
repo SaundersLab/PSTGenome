@@ -81,7 +81,7 @@ class RawFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     mv {R1_out}.temp {R1_out}
                     mv {R2_out}.temp {R2_out}
-                    '''.format(output_dir=os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, 'FastQC'),
+                    '''.format(output_dir=os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, 'RawFastQC'),
                                R1_in=self.input()[0].path,
                                R2_in=self.input()[1].path,
                                lib=self.library,
@@ -163,7 +163,7 @@ class TrimmedFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     mv {R1_out}.temp {R1_out}
                     mv {R2_out}.temp {R2_out}
-                    '''.format(output_dir=os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, 'FastQC'),
+                    '''.format(output_dir=os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, 'TrimmedFastQC'),
                                R1_in=self.input()[0].path,
                                R2_in=self.input()[1].path,
                                lib=self.library,
