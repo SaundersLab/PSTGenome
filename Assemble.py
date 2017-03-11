@@ -51,6 +51,45 @@ class FetchFastqGZ(CheckTargetNonEmpty, SlurmExecutableTask):
 
 
 @requires(FetchFastqGZ)
+class RawFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # Set the SLURM request params for this task
+            self.mem = 3000
+            self.n_cpu = 1
+            self.partition = "tgac-medium"
+
+        def output(self):
+            return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'raw', 'R1', 'fastqc_data.txt')),
+                    LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'raw', 'R2', 'fastqc_data.txt'))]
+
+        def work_script(self):
+            return '''#!/bin/bash
+                    source fastqc-0.11.4
+                    mkdir -p {output_dir}
+                    set -euo pipefail
+
+                    fastqc {R1_in} {R2_in} -o {output_dir} -t 1
+
+                    cd {output_dir}
+                    unzip filtered_R1_fastqc.zip
+                    sed 's/Filename\tfiltered_R1.fastq.gz/Filename\t{lib}_R1/'  filtered_R1_fastqc/fastqc_data.txt > {R1_out}.temp
+
+                    unzip filtered_R2_fastqc.zip
+                    sed 's/Filename\tfiltered_R2.fastq.gz/Filename\t{lib}_R2/'  filtered_R2_fastqc/fastqc_data.txt > {R2_out}.temp
+
+                    mv {R1_out}.temp {R1_out}
+                    mv {R2_out}.temp {R2_out}
+                    '''.format(output_dir=os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, 'FastQC'),
+                               R1_in=self.input()[0].path,
+                               R2_in=self.input()[1].path,
+                               lib=self.library,
+                               R1_out=self.output()[0].path,
+                               R2_out=self.output()[1].path)
+
+
+@requires(FetchFastqGZ)
 class Trimmomatic(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -88,58 +127,13 @@ class Trimmomatic(CheckTargetNonEmpty, SlurmExecutableTask):
                            library=self.library,
                            R1_in=self.input()[0].path,
                            R2_in=self.input()[1].path,
-                           adapters='/tgac/software/testing/trimmomatic/0.30/x86_64/bin/adapters/TruSeq.cat.fa',
+                           adapters='/usr/users/ga004/buntingd/adapters.fa',
                            R1_out=self.output()[0].path,
                            R2_out=self.output()[1].path)
 
 
-@requires(FetchFastqGZ)
-class FastxQC(SlurmExecutableTask):
-    '''Runs Fastx toolkit to plot the nucleotide and base call quality score distributions '''
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 3000
-        self.n_cpu = 1
-        self.partition = "tgac-medium"
-
-    def output(self):
-        working_dir = os.path.join(self.base_dir, PIPELINE, VERSION, self.library)
-        return {'stats_R1': LocalTarget(os.path.join(working_dir, 'QC', self.library + "_R1_stats.txt")),
-                'stats_R2': LocalTarget(os.path.join(working_dir, 'QC', self.library + "_R2_stats.txt")),
-                'boxplot_R1': LocalTarget(os.path.join(working_dir, 'QC', self.library + "_R1_quality.png")),
-                'boxplot_R2': LocalTarget(os.path.join(working_dir, 'QC', self.library + "_R2_quality.png")),
-                'nt_dist_R1': LocalTarget(os.path.join(working_dir, 'QC', self.library + "_R1_nt_distr.png")),
-                'nt_dist_R2': LocalTarget(os.path.join(working_dir, 'QC', self.library + "_R2_nt_distr.png")),
-                }
-
-    def work_script(self):
-        return '''#!/bin/bash
-        source fastx_toolkit-0.0.13.2
-        set -euo pipefail
-
-        gzip -cd {R1_in} | fastx_quality_stats -o {stats_R1} -Q33
-        gzip -cd {R2_in} | fastx_quality_stats -o {stats_R2} -Q33
-
-        fastq_quality_boxplot_graph.sh -i {stats_R1} -o {boxplot_R1}
-        fastq_quality_boxplot_graph.sh -i {stats_R2} -o {boxplot_R2}
-
-        fastx_nucleotide_distribution_graph.sh -i {stats_R1} -o {nt_dist_R1}
-        fastx_nucleotide_distribution_graph.sh -i {stats_R2} -o {nt_dist_R2}
-
-        '''.format(R1_in=self.input()[0].path,
-                   R2_in=self.input()[1].path,
-                   stats_R1=self.output()['stats_R1'].path,
-                   stats_R2=self.output()['stats_R2'].path,
-                   boxplot_R1=self.output()['boxplot_R1'].path,
-                   boxplot_R2=self.output()['boxplot_R2'].path,
-                   nt_dist_R1=self.output()['nt_dist_R1'].path,
-                   nt_dist_R2=self.output()['nt_dist_R2'].path)
-
-
 @requires(Trimmomatic)
-class FastQC(CheckTargetNonEmpty, SlurmExecutableTask):
+class TrimmedFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -149,8 +143,8 @@ class FastQC(CheckTargetNonEmpty, SlurmExecutableTask):
             self.partition = "tgac-medium"
 
         def output(self):
-            return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'QC', 'R1', 'fastqc_data.txt')),
-                    LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'QC', 'R2', 'fastqc_data.txt'))]
+            return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'trimmed', 'R1', 'fastqc_data.txt')),
+                    LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'trimmed', 'R2', 'fastqc_data.txt'))]
 
         def work_script(self):
             return '''#!/bin/bash
@@ -205,8 +199,8 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
 
 
 @inherits(KatHist)
-@inherits(FastQC)
-@inherits(FastxQC)
+@inherits(RawFastQC)
+@inherits(TrimmedFastQC)
 class PerLibPipeline(luigi.WrapperTask):
     '''Wrapper task that runs all tasks on a single library'''
 
