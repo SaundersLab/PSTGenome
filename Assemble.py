@@ -209,8 +209,8 @@ class KatComp(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".comp")),
-                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".comp.png"))]
+        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".comp.stats")),
+                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".comp-main.mx.density.png"))]
 
     def work_script(self):
         return '''#!/bin/bash
