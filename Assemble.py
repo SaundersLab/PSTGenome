@@ -205,9 +205,9 @@ class PerLibPipeline(luigi.WrapperTask):
     '''Wrapper task that runs all tasks on a single library'''
 
     def requires(self):
-        return {'kathit': self.clone(KatHist),
-                'fastqc': self.clone(FastQC),
-                'fastxgq': self.clone(FastxQC)}
+        return [self.clone(KatHist),
+                self.clone(RawFastQC),
+                self.clone(TrimmedFastQC)]
 
     def output(self):
         return self.input()
