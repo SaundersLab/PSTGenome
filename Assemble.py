@@ -182,8 +182,8 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library + ".hist")),
-                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library + ".hist.png"))]
+        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist")),
+                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist.png"))]
 
     def work_script(self):
         return '''#!/bin/bash
@@ -209,8 +209,8 @@ class KatComp(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library + ".comp")),
-                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library + ".comp.png"))]
+        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".comp")),
+                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".comp.png"))]
 
     def work_script(self):
         return '''#!/bin/bash
