@@ -198,6 +198,34 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
                    R2=self.input()[1].path)
 
 
+@requires(Trimmomatic)
+class KatComp(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 4000
+        self.n_cpu = 4
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library + ".comp")),
+                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library + ".comp.png"))]
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source kat-2.3.2
+                    set -euo pipefail
+
+                    kat comp -n -o {output_prefix} -t {n_cpu} <(zcat {R1}) <(zcat {R2})
+
+        '''.format(output_prefix=self.output()[0].path,
+                   n_cpu=self.n_cpu,
+                   R1=self.input()[0].path,
+                   R2=self.input()[1].path)
+
+
+@inherits(KatComp)
 @inherits(KatHist)
 @inherits(RawFastQC)
 @inherits(TrimmedFastQC)
@@ -206,6 +234,7 @@ class PerLibPipeline(luigi.WrapperTask):
 
     def requires(self):
         return [self.clone(KatHist),
+                self.clone(KatComp),
                 self.clone(RawFastQC),
                 self.clone(TrimmedFastQC)]
 
