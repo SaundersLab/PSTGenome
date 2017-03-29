@@ -255,6 +255,48 @@ class LibraryBatchWrapper(luigi.WrapperTask):
     def output(self):
         return self.input()
 
+@inherits(LibraryBatchWrapper)
+@inherits(Trimmomatic)
+class W2WrapContigger(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 128000
+        self.n_cpu = 12
+        self.partition = "tgac-medium"
+
+    def requires(self):
+        return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.lib_list]
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'PE_assembly'))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source gcc-5.2.0;
+                    set -euo pipefail
+
+                    export OMP_PROC_BIND=spread
+                    export MALLOC_PER_THREAD=1
+                    export w2wrap='/nbi/Research-Groups/JIC/Diane-Saunders/User_Workareas/buntingd/assembly/w2rap-contigger'
+
+                    $w2wrap --dump_all --tmp_dir {temp_dir} \
+                                       -t {n_cpu} \
+                                       -m {mem} \
+                                       -o {output_dir}_temp \
+                                       -p run0 \
+                                       --read_files {reads}
+                  mv {output_dir}_temp {output_dir}
+
+        '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly'),
+                   n_cpu=self.n_cpu,
+                   mem=int(self.mem/1000)
+                   output_dir=self.output().path,
+                   reads=','.join([','.join(x) for x in self.input()]))
+
+
+
 # ----------------------------------------------------------------------- #
 
 
@@ -266,5 +308,5 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as libs_file:
         lib_list = [line.rstrip() for line in libs_file if line[0] != '#']
 
-    luigi.run(['LibraryBatchWrapper',
+    luigi.run(['W2WrapContigger',
                '--lib-list', json.dumps(lib_list)] + sys.argv[2:])
