@@ -2,9 +2,12 @@ import os
 import sys
 import json
 import itertools
+import sqlalchemy
+import subprocess
 
 import luigi
 
+from luigi.contrib import sqla
 from luigi.util import requires, inherits
 from luigi import LocalTarget
 
@@ -229,6 +232,44 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
                    mem=int(0.9 * self.mem / 1000),
                    output_dir=self.output().path,
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
+
+
+@requires(W2RapContigger)
+class ContigStats(sqla.CopyToTable):
+    columns = [
+        (["K", sqlalchemy.INTEGER], {}),
+        (["n", sqlalchemy.FLOAT], {}),
+        (["n:500", sqlalchemy.FLOAT], {}),
+        (["L50", sqlalchemy.FLOAT], {}),
+        (["min", sqlalchemy.FLOAT], {}),
+        (["N80", sqlalchemy.FLOAT], {}),
+        (["N50", sqlalchemy.FLOAT], {}),
+        (["N20", sqlalchemy.FLOAT], {}),
+        (["E-size", sqlalchemy.FLOAT], {}),
+        (["max", sqlalchemy.FLOAT], {}),
+        (["sum", sqlalchemy.FLOAT], {}),
+        (["path", sqlalchemy.String(10)], {})
+    ]
+
+    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
+    table = "W2Rap"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        abyss = self.get_abyss()
+        self._rows = [[self.K] + abyss]
+
+    def get_abyss(self):
+        r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path, 'a.lines.fasta'),
+                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
+        values = r.split("\n")[1].split('\t')
+        return [float(x) for x in values[:-1]] + [values[-1]]
+
+    def rows(self):
+        return self._rows
+
+    def update_id(self):
+        return hash(str(self._rows))
 
 # ------------------ LMP Specific -------------------------- #
 
@@ -780,7 +821,7 @@ class LMPBatchWrapper(luigi.WrapperTask):
 
 @inherits(PEBatchWrapper)
 @inherits(LMPBatchWrapper)
-@inherits(W2RapContigger)
+@inherits(ContigStats)
 @inherits(SOAPScaff)
 @inherits(KATBatchWrapper)
 @inherits(KatCompContigs)
@@ -796,7 +837,7 @@ class Wrapper(luigi.WrapperTask):
         yield self.clone(KATBatchWrapper)
 
         for k in self.K_list:
-            yield self.clone(W2RapContigger, K=k)
+            yield self.clone(ContigStats, K=k)
             yield self.clone(SOAPScaff, K=k)
             for lib in self.pe_libs:
                 yield self.clone(KatCompContigs, K=k, library=lib)
