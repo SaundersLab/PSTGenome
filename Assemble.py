@@ -187,6 +187,7 @@ class TrimmedFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
 @inherits(Trimmomatic)
 class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
     library = None
+    K = luigi.IntParameter()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -199,7 +200,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.pe_libs]
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'PE_assembly'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -215,18 +216,19 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
                              -t {n_cpu} \
                              -m {mem} \
                              -d 16 \
+                             -K {K} \
                              -o {output_dir}_temp \
-                             -p run0 \
+                             -p pst \
                              --read_files {reads}
 
                   mv {output_dir}_temp {output_dir}
 
         '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly'),
                    n_cpu=self.n_cpu,
+                   K=self.K,
                    mem=int(0.9 * self.mem / 1000),
                    output_dir=self.output().path,
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
-
 
 # ------------------ LMP Specific -------------------------- #
 
@@ -352,7 +354,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def requires(self):
-        return {'contigs': self.clone(W2RapContigger),
+        return {'contigs': self.clone(W2RapContigger, K=200),
                 'lmp': self.clone(CompressLMP)}
 
     def output(self):
@@ -466,8 +468,7 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist")),
-                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist.png"))]
+        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist"))]
 
     def work_script(self):
         return '''#!/bin/bash
@@ -543,6 +544,37 @@ class KatCompInter(CheckTargetNonEmpty, SlurmExecutableTask):
                    b_R2=self.input()[1][1].path)
 
 
+@inherits(CleanedReads)
+@inherits(W2RapContigger)
+class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 4000
+        self.n_cpu = 4
+        self.partition = "tgac-medium"
+
+    def requires(self):
+        return {'pe': [self.clone(CleanedReads, library=lib) for lib in self.pe_libs],
+                'contigs': self.clone(W2RapContigger)}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K), self.library + "-main.mx"))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source kat-2.3.2
+                    set -euo pipefail
+
+                    kat comp -o {output_prefix} -t {n_cpu} <(zcat {reads}) {contigs}
+
+        '''.format(output_prefix=self.output().path[:-8],
+                   n_cpu=self.n_cpu,
+                   reads=' '.join([x[0].path + ' ' + x[1].path for x in self.input()['pe']]),
+                   contigs=os.path.join(self.input()['contigs'].path, 'a.lines.fasta'))
+
+
 @inherits(KatHist)
 @inherits(KatCompIntra)
 @inherits(KatCompInter)
@@ -563,10 +595,10 @@ class KATBatchWrapper(luigi.WrapperTask):
 # ------------------ Scaffolding -------------------------- #
 
 
-@inherits(W2RapContigger)
+@requires(W2RapContigger)
 class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
 
-    prefix = luigi.Parameter(default='pst')
+    prefix = luigi.Parameter(default='PST')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -575,11 +607,8 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
         self.n_cpu = 1
         self.partition = "tgac-short"
 
-    def requires(self):
-        return self.clone(W2RapContigger)
-
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', self.prefix + '.contig'))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + '.contig'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -590,8 +619,8 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
                     $soap/s_prepare -g {prefix} -K 71 -c {contigs}
 
         '''.format(contigs=os.path.join(self.input().path, 'a.lines.fasta'),
-                   cwd=os.path.split(self.output().path)[0],
-                   prefix=self.prefix)
+                   cwd=self.input().path,
+                   prefix=self.prefix + str(self.K))
 
 
 @inherits(LMP_process)
@@ -642,7 +671,7 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', self.prefix + '.readOnContig.gz'))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + '.readOnContig.gz'))
 
     def requires(self):
         return {'config': self.clone(SOAPConfig),
@@ -660,7 +689,7 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
         '''.format(config=self.input()['config'].path,
                    cwd=os.path.split(self.output().path)[0],
                    n_cpu=self.n_cpu,
-                   prefix=self.prefix)
+                   prefix=self.prefix + str(self.K))
 
 
 @requires(SOAPMap)
@@ -674,7 +703,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', self.prefix + '.scaf'))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + '.readOnContig.gz'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -687,7 +716,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
 
         '''.format(cwd=os.path.split(self.output().path)[0],
                    n_cpu=self.n_cpu,
-                   prefix=self.prefix)
+                   prefix=self.prefix + str(self.K))
 
 
 # ------------------ Wrapper Tasks -------------------------- #
@@ -754,19 +783,23 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(W2RapContigger)
 @inherits(SOAPScaff)
 @inherits(KATBatchWrapper)
+@inherits(KatCompContigs)
 class Wrapper(luigi.WrapperTask):
-    '''Wrapper task that runs all tasks on a single library'''
     library = None
+    K = None
+
+    K_list = luigi.ListParameter(default=[200])
 
     def requires(self):
-        return [self.clone(LMPBatchWrapper),
-                self.clone(PEBatchWrapper),
-                self.clone(W2RapContigger),
-                self.clone(SOAPScaff),
-                self.clone(KATBatchWrapper)]
+        yield self.clone(LMPBatchWrapper)
+        yield self.clone(PEBatchWrapper)
+        yield self.clone(KATBatchWrapper)
 
-    def output(self):
-        return self.input()
+        for k in self.K_list:
+            yield self.clone(W2RapContigger, K=k)
+            yield self.clone(SOAPScaff, K=k)
+            for lib in self.pe_libs:
+                yield self.clone(KatCompContigs, K=k, library=lib)
 
 
 # ----------------------------------------------------------------------------------------------------- #
