@@ -76,6 +76,7 @@ class RawFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
                     fastqc {R1_in} {R2_in} -o {output_dir} -t 1
 
                     cd {output_dir}
+
                     unzip raw_R1_fastqc.zip
                     sed 's/Filename\traw_R1.fastq.gz/Filename\t{lib}_R1/'  raw_R1_fastqc/fastqc_data.txt > {R1_out}.temp
 
