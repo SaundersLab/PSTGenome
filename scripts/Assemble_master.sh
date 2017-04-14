@@ -11,5 +11,6 @@ source /usr/users/ga004/buntingd/PSTGenome/genome/bin/activate
 export LUIGI_CONFIG_PATH=$SL/FP_pipeline/luigi.cfg
 
 srun python Assemble.py pe_libs.txt lmp_libs.txt \
+            --K-list '[80, 100, 160, 200, 300]'
             --base-dir $SL/PSTGenome/data \
             --workers 100\
