@@ -7,7 +7,7 @@ import luigi
 from luigi.util import requires, inherits
 from luigi import LocalTarget
 
-from fieldpathogenomics.luigi.slurm import SlurmExecutableTask, SlurmTask
+from fieldpathogenomics.luigi.slurm import SlurmExecutableTask
 from fieldpathogenomics.utils import CheckTargetNonEmpty
 import fieldpathogenomics.utils as utils
 
@@ -207,13 +207,13 @@ class KatCompPE(CheckTargetNonEmpty, SlurmExecutableTask):
 @inherits(FetchFastqGZ)
 @inherits(Assemble.W2RapContigger)
 @inherits(LMP_process)
-class InsertDist(CheckTargetNonEmpty, SlurmExecutableTask):
+class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 2000
-        self.n_cpu = 5
+        self.mem = 750
+        self.n_cpu = 8
         self.partition = "tgac-medium"
 
     def requires(self):
@@ -221,7 +221,7 @@ class InsertDist(CheckTargetNonEmpty, SlurmExecutableTask):
                 'lmp': self.clone(LMP_process)}
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".is"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".sam"))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -230,62 +230,86 @@ class InsertDist(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     #bwa index {pe_assembly}
 
-                    bwa mem -SP -t {n_cpu} {pe_assembly} {R1} {R2} |
-                    grep -v '@SQ' |
-                    grep -v '@PG' |
-                    awk -v binsize=100 '{{ if ($5==60) {{ if ($9<0) {{print int($9/binsize)}} else{{print int($9/binsize*-1)}} }} }}' |
-                    sort -n |
-                    uniq -c |
-                    awk -v binsize=100 '{{print $2*binsize","$1}}' > {output}.temp
+                    bwa mem -SP -t {n_cpu} {pe_assembly} {R1} {R2} > {output}.temp
 
                     mv {output}.temp {output}
         '''.format(pe_assembly=os.path.join(self.input()['contigs'].path, 'a.lines.fasta'),
-                   n_cpu=self.n_cpu - 1,  # Leave one core spare for the pipes
+                   n_cpu=self.n_cpu,
                    R1=self.input()['lmp'][self.library][0].path,
                    R2=self.input()['lmp'][self.library][1].path,
                    output=self.output().path)
 
 
-@requires(InsertDist)
-class PlotInsertDist(CheckTargetNonEmpty, SlurmTask):
+@requires(MapContigs)
+class Sort(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".bam"))
+
+    def work_script(self):
+        return '''#!/bin/bash
+               source samtools-1.4
+               set -euo pipefail
+
+               samtools sort --output-fmt BAM -o {output}.temp {input}
+
+               mv {output}.temp {output}
+                '''.format(input=self.input().path,
+                           output=self.output().path)
+
+
+@requires(Sort)
+class CollectISMetrics(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
         self.mem = 1000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "tgac-short"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".is.pdf"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, "insert_size"))
 
-    def work(self):
-        import matplotlib
-        matplotlib.use('pdf')
-        import matplotlib.pyplot as plt
+    def work_script(self):
+        return '''#!/bin/bash
+               source jre-8u92
+               source picardtools-2.1.1
+               source R-3.3.1;
+               picard='{picard}'
+               set -euo pipefail
 
-        x, y = [], []
-        with self.input().open('r') as fin:
-            for line in fin:
-                a, b = line.rstrip().split(',')
-                x.append(a)
-                y.append(b)
+               $picard CollectInsertSizeMetrics \
+                       VERBOSITY=ERROR \
+                       QUIET=true \
+                       I={input} \
+                       O={output}.temp \
+                       M=0.5 \
+                       H={output}.pdf
 
-        plt.plot(x, y)
-        plt.title(self.library + " Insert size")
-        plt.savefig(self.output().path)
+               mv {output}.temp {output}
+                '''.format(input=self.input().path,
+                           output=self.output().path,
+                           picard=utils.picard.format(mem=self.mem * self.n_cpu))
 
 
 @inherits(RawFastQC)
 @inherits(KatCompPE)
-@inherits(PlotInsertDist)
+@inherits(CollectISMetrics)
 class PerLibPipeline(luigi.WrapperTask):
     '''Wrapper task that runs all tasks on a single library'''
 
     def requires(self):
         return [self.clone(RawFastQC),
                 self.clone(KatCompPE),
-                self.clone(PlotInsertDist)]
+                self.clone(CollectISMetrics)]
 
     def output(self):
         return self.input()
@@ -304,6 +328,147 @@ class LibraryBatchWrapper(luigi.WrapperTask):
         return self.input()
 
 
+@inherits(Assemble.W2RapContigger)
+class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    prefix = luigi.Parameter(default='pst')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 28000
+        self.n_cpu = 1
+        self.partition = "tgac-short"
+
+    def requires(self):
+        return self.clone(Assemble.W2RapContigger, lib_list=['LIB17363', 'LIB26234'])
+
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', self.prefix + '.contig'))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    set -euo pipefail
+                    cd {cwd}
+                    export soap='/usr/users/ga004/buntingd/w2rap/deps/soap_scaffolder'
+
+                    $soap/s_prepare -g {prefix} -K 71 -c {contigs}
+
+        '''.format(contigs=os.path.join(self.input().path, 'a.lines.fasta'),
+                   cwd=os.path.split(self.output().path)[0],
+                   prefix=self.prefix)
+
+
+@inherits(LMP_process)
+@inherits(Assemble.Trimmomatic)
+class SOAPConfig(CheckTargetNonEmpty, luigi.Task):
+
+    def requires(self):
+        return {'lmp': self.clone(LMP_process),
+                'pe': {lib: self.clone(Assemble.Trimmomatic, library=lib) for lib in ['LIB17363', 'LIB26234']}}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'config.txt'))
+
+    def run(self):
+        template = '[LIB]\navg_ins={avg_ins}\nreverse_seq={reverse_seq}\nq1={q1}\nq2={q2}\n'
+        insert_sizes = {'LIB17363': 400, 'LIB26234': 800,
+                        'LIB19826': 0, 'LIB19827': 0,
+                        'LIB19828': 0, 'LIB19829': 0,
+                        'LIB19830': 0, 'LIB19831': 0,
+                        'LIB19832': 6000, 'LIB19833': 5000,
+                        'LIB19834': 4000, 'LIB19835': 3500,
+                        'LIB19836': 2500, 'LIB19837': 2100}
+
+        with self.output().open('w') as fout:
+            for lib in self.input()['pe'].keys():
+                if insert_sizes[lib] > 0:
+                    fout.write(template.format(avg_ins=insert_sizes[lib],
+                                               reverse_seq='0',
+                                               q1=self.input()['pe'][lib][0].path,
+                                               q2=self.input()['pe'][lib][1].path))
+            for lib in self.input()['lmp'].keys():
+                if insert_sizes[lib] > 0:
+                    fout.write(template.format(avg_ins=insert_sizes[lib],
+                                               reverse_seq='1',
+                                               q1=self.input()['lmp'][lib][0].path,
+                                               q2=self.input()['lmp'][lib][1].path))
+
+
+@inherits(SOAPPrep)
+@inherits(SOAPConfig)
+class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 2000
+        self.n_cpu = 12
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', self.prefix + '.readOnContig.gz'))
+
+    def requires(self):
+        return {'config': self.clone(SOAPConfig),
+                'contigs': self.clone(SOAPPrep)}
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    set -euo pipefail
+
+                    cd {cwd}
+                    export soap='/usr/users/ga004/buntingd/w2rap/deps/soap_scaffolder'
+
+                    $soap/s_map -k 31 -s {config} -p {n_cpu} -g {prefix}
+
+        '''.format(config=self.input()['config'].path,
+                   cwd=os.path.split(self.output().path)[0],
+                   n_cpu=self.n_cpu,
+                   prefix=self.prefix)
+
+
+@requires(SOAPMap)
+class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 500
+        self.n_cpu = 12
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', self.prefix + '.scaf'))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    set -euo pipefail
+
+                    cd {cwd}
+                    export soap='/usr/users/ga004/buntingd/w2rap/deps/soap_scaffolder'
+
+                    $soap/s_scaff -p {n_cpu} -g {prefix}
+
+        '''.format(cwd=os.path.split(self.output().path)[0],
+                   n_cpu=self.n_cpu,
+                   prefix=self.prefix)
+
+
+@inherits(SOAPScaff)
+@inherits(LibraryBatchWrapper)
+class Wrapper(luigi.WrapperTask):
+    '''Wrapper task that runs all tasks on a single library'''
+    library = None
+
+    def requires(self):
+        return [self.clone(LibraryBatchWrapper),
+                self.clone(SOAPScaff)]
+
+    def output(self):
+        return self.input()
+
+
 if __name__ == '__main__':
     os.environ['TMPDIR'] = "/tgac/scratch/buntingd"
     logger, alloc_log = utils.logging_init(log_dir=os.path.join(os.getcwd(), 'logs'),
@@ -312,6 +477,6 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as libs_file:
         lib_list = [line.rstrip() for line in libs_file if line[0] != '#']
 
-    luigi.run(['LibraryBatchWrapper',
+    luigi.run(['Wrapper',
                '--lib-list', json.dumps(lib_list),
                '--pe-lib', 'LIB17363'] + sys.argv[2:])
