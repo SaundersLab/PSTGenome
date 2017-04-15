@@ -20,6 +20,18 @@ PIPELINE = os.path.basename(__file__).split('.')[0]
 VERSION = '0.1'
 luigi.auto_namespace(scope=PIPELINE)
 
+
+# This information has to be filled in based on the output of
+# CollectISMetrics, obviously hardcoding it here is not good!!!
+
+INSERT_SIZES = {'LIB17363': 400, 'LIB26234': 800,
+                'LIB19826': 0, 'LIB19827': 0,
+                'LIB19828': 0, 'LIB19829': 0,
+                'LIB19830': 0, 'LIB19831': 0,
+                'LIB19832': 6000, 'LIB19833': 5000,
+                'LIB19834': 4000, 'LIB19835': 3500,
+                'LIB19836': 2500, 'LIB19837': 2100}
+
 # ------------------ Shared QC -------------------------- #
 
 
@@ -680,24 +692,17 @@ class SOAPConfig(CheckTargetNonEmpty, luigi.Task):
 
     def run(self):
         template = '[LIB]\navg_ins={avg_ins}\nreverse_seq={reverse_seq}\nq1={q1}\nq2={q2}\n'
-        insert_sizes = {'LIB17363': 400, 'LIB26234': 800,
-                        'LIB19826': 0, 'LIB19827': 0,
-                        'LIB19828': 0, 'LIB19829': 0,
-                        'LIB19830': 0, 'LIB19831': 0,
-                        'LIB19832': 6000, 'LIB19833': 5000,
-                        'LIB19834': 4000, 'LIB19835': 3500,
-                        'LIB19836': 2500, 'LIB19837': 2100}
 
         with self.output().open('w') as fout:
             for lib in self.input()['pe'].keys():
-                if insert_sizes[lib] > 0:
-                    fout.write(template.format(avg_ins=insert_sizes[lib],
+                if INSERT_SIZES[lib] > 0:
+                    fout.write(template.format(avg_ins=INSERT_SIZES[lib],
                                                reverse_seq='0',
                                                q1=self.input()['pe'][lib][0].path,
                                                q2=self.input()['pe'][lib][1].path))
             for lib in self.input()['lmp'].keys():
-                if insert_sizes[lib] > 0:
-                    fout.write(template.format(avg_ins=insert_sizes[lib],
+                if INSERT_SIZES[lib] > 0:
+                    fout.write(template.format(avg_ins=INSERT_SIZES[lib],
                                                reverse_seq='1',
                                                q1=self.input()['lmp'][lib][0].path,
                                                q2=self.input()['lmp'][lib][1].path))
