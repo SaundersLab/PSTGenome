@@ -399,7 +399,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
                 'lmp': self.clone(CompressLMP)}
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".sam"))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, self.library + ".sam"))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -429,7 +429,7 @@ class Sort(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".bam"))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, self.library + ".bam"))
 
     def work_script(self):
         return '''#!/bin/bash
