@@ -256,8 +256,6 @@ class ContigStats(sqla.CopyToTable):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        abyss = self.get_abyss()
-        self._rows = [[self.K] + abyss]
 
     def get_abyss(self):
         r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path, 'a.lines.fasta'),
@@ -266,10 +264,12 @@ class ContigStats(sqla.CopyToTable):
         return [float(x) for x in values[:-1]] + [values[-1]]
 
     def rows(self):
+        abyss = self.get_abyss()
+        self._rows = [[self.K] + abyss]
         return self._rows
 
     def update_id(self):
-        return hash(str(self._rows))
+        return hash(str(self.input().path))
 
 # ------------------ LMP Specific -------------------------- #
 
