@@ -206,6 +206,8 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)))
 
     def work_script(self):
+        output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
+                                            "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
         return '''#!/bin/bash
                     source gcc-5.2.0;
                     mkdir -p {temp_dir}
@@ -231,7 +233,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
                    n_cpu=self.n_cpu,
                    K=self.K,
                    mem=int(0.9 * self.mem / 1000),
-                   output_dir=self.output().path,
+                   output_dir=output,
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
 
 
