@@ -381,6 +381,55 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
 
 
+@inherits(CleanedReads)
+class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 300000
+        self.n_cpu = 24
+        self.host = "uv2"
+        self.rm_tmp = False
+
+    def requires(self):
+        # Filter out the LMP libraries with poor insert sizes
+        return {'pe': [self.clone(CleanedReads, library=lib.rstrip()) for lib in self.pe_libs],
+                'lmp': [self.clone(CleanedReads, library=lib.rstrip()) for lib in self.lmp_libs if INSERT_SIZES[lib] > 0]}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'dipspades'))
+
+    def work_script(self):
+        output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
+                                            "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
+
+        pe = ' '.join(["--pe{i}-1 {R1} --pe{i}-2 {R2}".format(i=i+1, R1=x[0].path, R2=x[1].path)
+                      for i, x in enumerate(self.input()['pe'])])
+        lmp = ' '.join(["--mp{i}-1 {R1} --mp{i}-2 {R2}".format(i=i+1, R1=x[0].path, R2=x[1].path)
+                       for i, x in enumerate(self.input()['lmp'])])
+
+        return '''#!/bin/bash
+                    mkdir -p {output_dir}_temp
+                    set -euo pipefail
+
+                    export dipspades='/tgac/software/testing/spades/3.10.1/x86_64/bin/dipspades.py'
+
+                    $dipspades -o {output_dir}_temp \
+                               --thread {n_cpu} \
+                               --memory {mem} \
+                                {pe} \
+                                {lmp}
+
+                  mv {output_dir}_temp {output_dir}
+
+        '''.format(n_cpu=self.n_cpu,
+                   mem=int(0.9 * self.mem / 1000),
+                   output_dir=output,
+                   pe=pe,
+                   lmp=lmp)
+
+
 @requires(W2RapContigger)
 class ContigStats(sqla.CopyToTable):
     columns = [
@@ -838,6 +887,7 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(SOAPScaff)
 @inherits(KATBatchWrapper)
 @inherits(KatCompContigs)
+@inherits(Dipspades)
 class Wrapper(luigi.WrapperTask):
     library = None
     K = None
@@ -848,6 +898,7 @@ class Wrapper(luigi.WrapperTask):
         yield self.clone(LMPBatchWrapper)
         yield self.clone(PEBatchWrapper)
         yield self.clone(KATBatchWrapper)
+        yield self.clone(Dipspades)
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
