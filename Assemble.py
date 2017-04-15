@@ -184,7 +184,7 @@ class TrimmedFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
                                R1_out=self.output()[0].path,
                                R2_out=self.output()[1].path)
 
-# ------------------ Contigging -------------------------- #
+# ------------------ Contiging -------------------------- #
 
 
 @inherits(Trimmomatic)
@@ -208,14 +208,14 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
     def work_script(self):
         return '''#!/bin/bash
                     source gcc-5.2.0;
+                    mkdir -p {temp_dir}
                     set -euo pipefail
 
                     export OMP_PROC_BIND=spread
                     export MALLOC_PER_THREAD=1
-                    export w2wrap='/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/User_Workareas/buntingd/assembly/w2rap-contigger'
+                    export w2rap='/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/User_Workareas/buntingd/assembly/w2rap-contigger'
 
-
-                    $w2wrap  --tmp_dir {temp_dir} \
+                    $w2rap  --tmp_dir {temp_dir} \
                              -t {n_cpu} \
                              -m {mem} \
                              -d 16 \
@@ -226,7 +226,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
 
                   mv {output_dir}_temp {output_dir}
 
-        '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly'),
+        '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly', str(self.K)),
                    n_cpu=self.n_cpu,
                    K=self.K,
                    mem=int(0.9 * self.mem / 1000),
