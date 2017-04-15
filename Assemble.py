@@ -196,96 +196,6 @@ class TrimmedFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
                                R1_out=self.output()[0].path,
                                R2_out=self.output()[1].path)
 
-# ------------------ Contiging -------------------------- #
-
-
-@inherits(Trimmomatic)
-class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
-    library = None
-    K = luigi.IntParameter()
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 300000
-        self.n_cpu = 24
-        self.host = "uv2"
-
-    def requires(self):
-        return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.pe_libs]
-
-    def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)))
-
-    def work_script(self):
-        output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
-                                            "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
-        return '''#!/bin/bash
-                    source gcc-5.2.0;
-                    mkdir -p {temp_dir}
-                    mkdir -p {output_dir}_temp
-                    set -euo pipefail
-
-                    export OMP_PROC_BIND=spread
-                    export MALLOC_PER_THREAD=1
-                    export w2rap='/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/User_Workareas/buntingd/assembly/w2rap-contigger'
-
-                    $w2rap  --tmp_dir {temp_dir} \
-                             -t {n_cpu} \
-                             -m {mem} \
-                             -d 16 \
-                             -K {K} \
-                             -o {output_dir}_temp \
-                             -p pst \
-                             --read_files {reads}
-
-                  mv {output_dir}_temp {output_dir}
-
-        '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly', str(self.K)),
-                   n_cpu=self.n_cpu,
-                   K=self.K,
-                   mem=int(0.9 * self.mem / 1000),
-                   output_dir=output,
-                   reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
-
-
-@requires(W2RapContigger)
-class ContigStats(sqla.CopyToTable):
-    columns = [
-        (["K", sqlalchemy.INTEGER], {}),
-        (["n", sqlalchemy.FLOAT], {}),
-        (["n:500", sqlalchemy.FLOAT], {}),
-        (["L50", sqlalchemy.FLOAT], {}),
-        (["min", sqlalchemy.FLOAT], {}),
-        (["N80", sqlalchemy.FLOAT], {}),
-        (["N50", sqlalchemy.FLOAT], {}),
-        (["N20", sqlalchemy.FLOAT], {}),
-        (["E-size", sqlalchemy.FLOAT], {}),
-        (["max", sqlalchemy.FLOAT], {}),
-        (["sum", sqlalchemy.FLOAT], {}),
-        (["path", sqlalchemy.String(10)], {})
-    ]
-
-    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
-    table = "W2Rap"
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def get_abyss(self):
-        r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path, 'a.lines.fasta'),
-                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
-        values = r.split("\n")[1].split('\t')
-        return [float(x) for x in values[:-1]] + [values[-1]]
-
-    def rows(self):
-        abyss = self.get_abyss()
-        self._rows = [[self.K] + abyss]
-        return self._rows
-
-    def update_id(self):
-        return hash(str(self.input().path))
-
 # ------------------ LMP Specific -------------------------- #
 
 
@@ -397,6 +307,119 @@ class CompressLMP(CheckTargetNonEmpty, SlurmExecutableTask):
                             R1_out=self.output()[0].path,
                             R2_out=self.output()[1].path)
 
+# ------------------ Cleaned Reads -------------------------- #
+
+
+@inherits(Trimmomatic)
+@inherits(CompressLMP)
+class CleanedReads(luigi.WrapperTask):
+    '''The LMP and the PE post-QC reads come out of different
+       points in the pipeline, this task reconciles that'''
+
+    def requires(self):
+        if self.library in self.pe_libs:
+            return self.clone(Trimmomatic, library=self.library)
+        elif self.library in self.lmp_libs:
+            return self.clone(CompressLMP, library=self.library)
+        else:
+            raise Exception("Unknown library")
+
+    def output(self):
+        return self.input()
+
+
+# ------------------ Contiging -------------------------- #
+
+
+@inherits(Trimmomatic)
+class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
+    library = None
+    K = luigi.IntParameter()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 300000
+        self.n_cpu = 24
+        self.host = "uv2"
+
+    def requires(self):
+        return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.pe_libs]
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)))
+
+    def work_script(self):
+        output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
+                                            "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
+        return '''#!/bin/bash
+                    source gcc-5.2.0;
+                    mkdir -p {temp_dir}
+                    mkdir -p {output_dir}_temp
+                    set -euo pipefail
+
+                    export OMP_PROC_BIND=spread
+                    export MALLOC_PER_THREAD=1
+                    export w2rap='/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/User_Workareas/buntingd/assembly/w2rap-contigger'
+
+                    $w2rap  --tmp_dir {temp_dir} \
+                             -t {n_cpu} \
+                             -m {mem} \
+                             -d 16 \
+                             -K {K} \
+                             -o {output_dir}_temp \
+                             -p pst \
+                             --read_files {reads}
+
+                  mv {output_dir}_temp {output_dir}
+
+        '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly', str(self.K)),
+                   n_cpu=self.n_cpu,
+                   K=self.K,
+                   mem=int(0.9 * self.mem / 1000),
+                   output_dir=output,
+                   reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
+
+
+@requires(W2RapContigger)
+class ContigStats(sqla.CopyToTable):
+    columns = [
+        (["K", sqlalchemy.INTEGER], {}),
+        (["n", sqlalchemy.FLOAT], {}),
+        (["n:500", sqlalchemy.FLOAT], {}),
+        (["L50", sqlalchemy.FLOAT], {}),
+        (["min", sqlalchemy.FLOAT], {}),
+        (["N80", sqlalchemy.FLOAT], {}),
+        (["N50", sqlalchemy.FLOAT], {}),
+        (["N20", sqlalchemy.FLOAT], {}),
+        (["E-size", sqlalchemy.FLOAT], {}),
+        (["max", sqlalchemy.FLOAT], {}),
+        (["sum", sqlalchemy.FLOAT], {}),
+        (["path", sqlalchemy.String(10)], {})
+    ]
+
+    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
+    table = "W2Rap"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def get_abyss(self):
+        r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path, 'a.lines.fasta'),
+                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
+        values = r.split("\n")[1].split('\t')
+        return [float(x) for x in values[:-1]] + [values[-1]]
+
+    def rows(self):
+        abyss = self.get_abyss()
+        self._rows = [[self.K] + abyss]
+        return self._rows
+
+    def update_id(self):
+        return hash(str(self.input().path))
+
+# ------------------ LMP Insert Sizes -------------------------- #
+
 
 @inherits(W2RapContigger)
 @inherits(CompressLMP)
@@ -492,25 +515,7 @@ class CollectISMetrics(CheckTargetNonEmpty, SlurmExecutableTask):
                            output=self.output().path,
                            picard=utils.picard.format(mem=self.mem * self.n_cpu))
 
-
 # ------------------ Kmer Spectra -------------------------- #
-
-@inherits(Trimmomatic)
-@inherits(CompressLMP)
-class CleanedReads(luigi.WrapperTask):
-    '''The LMP and the PE post-QC reads come out of different
-       points in the pipeline, this task reconciles that'''
-
-    def requires(self):
-        if self.library in self.pe_libs:
-            return self.clone(Trimmomatic, library=self.library)
-        elif self.library in self.lmp_libs:
-            return self.clone(CompressLMP, library=self.library)
-        else:
-            raise Exception("Unknown library")
-
-    def output(self):
-        return self.input()
 
 
 @requires(CleanedReads)
