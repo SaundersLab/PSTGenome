@@ -1,5 +1,5 @@
 #!/bin/sh
-#SBATCH --mem 4000
+#SBATCH --mem 12000
 #SBTACH -N 1
 #SBATCH -n 1
 #SBATCH -c 1
