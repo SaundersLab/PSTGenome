@@ -209,6 +209,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         return '''#!/bin/bash
                     source gcc-5.2.0;
                     mkdir -p {temp_dir}
+                    mkdir -p {output_dir}_temp
                     set -euo pipefail
 
                     export OMP_PROC_BIND=spread
