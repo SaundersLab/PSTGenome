@@ -321,8 +321,8 @@ class LMP_process(CheckTargetNonEmpty, SlurmExecutableTask):
         return [self.clone(UnzipFastqGZ, library=lib.rstrip()) for lib in self.lmp_libs]
 
     def output(self):
-        return {lib: [LocalTarget(os.path.join(self.cwd, "nextclip_done", lib + '_nc_ABC_R1.fastq')),
-                      LocalTarget(os.path.join(self.cwd, "nextclip_done", lib + '_nc_ABC_R2.fastq'))] for lib in self.lmp_libs}
+        return {lib: [LocalTarget(os.path.join(self.cwd, "nextclip_done", 'nextclip', lib + '_nc_ABC_R1.fastq')),
+                      LocalTarget(os.path.join(self.cwd, "nextclip_done", 'nextclip', lib + '_nc_ABC_R2.fastq'))] for lib in self.lmp_libs}
 
     def work_script(self):
         return '''#!/bin/bash
