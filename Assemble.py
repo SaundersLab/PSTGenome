@@ -267,7 +267,7 @@ class LMP_process(CheckTargetNonEmpty, SlurmExecutableTask):
 
                 python $lmp_processing lmp_unzip {n_cpu}
 
-                mv {cwd}/nextclip {cwd}/nextclip_done
+                mv -T {cwd}/nextclip {cwd}/nextclip_done
                 '''.format(input='\n'.join([x[0].path + '\n' + x[1].path for x in self.input()]),
                            n_cpu=self.n_cpu,
                            cwd=self.cwd)
@@ -347,7 +347,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.pe_libs]
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)), "a.lines.fasta")
 
     def work_script(self):
         output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
@@ -371,13 +371,13 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
                              -p pst \
                              --read_files {reads}
 
-                  mv {output_dir}_temp {output_dir}
+                  mv -T {output_dir}_temp {output_dir}
 
         '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly', str(self.K)),
                    n_cpu=self.n_cpu,
                    K=self.K,
                    mem=int(0.9 * self.mem / 1000),
-                   output_dir=output,
+                   output_dir=os.path.split(output)[0],
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
 
 
@@ -410,19 +410,18 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
                        for i, x in enumerate(self.input()['lmp'])])
 
         return '''#!/bin/bash
-                    mkdir -p {output_dir}_temp
-                    set -euo pipefail
+                  mkdir -p {output_dir}_temp
+                  set -euo pipefail
 
-                    export dipspades='/tgac/software/testing/spades/3.10.1/x86_64/bin/dipspades.py'
+                  export dipspades='/tgac/software/testing/spades/3.10.1/x86_64/bin/dipspades.py'
 
-                    $dipspades -o {output_dir}_temp \
-                               --thread {n_cpu} \
-                               --memory {mem} \
-                                {pe} \
-                                {lmp}
+                  $dipspades -o {output_dir}_temp \
+                             --thread {n_cpu} \
+                             --memory {mem} \
+                              {pe} \
+                              {lmp}
 
-                  mv {output_dir}_temp {output_dir}
-
+                  mv -T {output_dir}_temp {output_dir}
         '''.format(n_cpu=self.n_cpu,
                    mem=int(0.8 * self.mem / 1000),
                    output_dir=output,
@@ -454,7 +453,7 @@ class ContigStats(sqla.CopyToTable):
         super().__init__(*args, **kwargs)
 
     def get_abyss(self):
-        r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path, 'a.lines.fasta'),
+        r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path),
                            stdout=subprocess.PIPE, shell=True, universal_newlines=True)
         values = r.stdout.split("\n")[1].split('\t')
         return [float(x) for x in values[:-1]] + [values[-1]]
@@ -498,7 +497,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
                     bwa mem -SP -t {n_cpu} {pe_assembly} {R1} {R2} > {output}.temp
 
                     mv {output}.temp {output}
-        '''.format(pe_assembly=os.path.join(self.input()['contigs'].path, 'a.lines.fasta'),
+        '''.format(pe_assembly=os.path.join(self.input()['contigs'].path),
                    n_cpu=self.n_cpu,
                    R1=self.input()['lmp'][0].path,
                    R2=self.input()['lmp'][1].path,
@@ -682,7 +681,7 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         '''.format(output_prefix=self.output().path[:-8],
                    n_cpu=self.n_cpu,
                    reads=' '.join([x[0].path + ' ' + x[1].path for x in self.input()['pe']]),
-                   contigs=os.path.join(self.input()['contigs'].path, 'a.lines.fasta'))
+                   contigs=os.path.join(self.input()['contigs'].path))
 
 
 @inherits(KatHist)
@@ -728,7 +727,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     $soap/s_prepare -g {prefix} -K 71 -c {contigs}
 
-        '''.format(contigs=os.path.join(self.input().path, 'a.lines.fasta'),
+        '''.format(contigs=os.path.join(self.input().path),
                    cwd=self.input().path,
                    prefix=self.prefix + str(self.K))
 
