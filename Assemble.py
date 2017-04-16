@@ -470,6 +470,32 @@ class ContigStats(sqla.CopyToTable):
 
 
 @inherits(W2RapContigger)
+class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "tgac-medium"
+
+    def requires(self):
+        return self.clone(W2RapContigger, K=200)
+
+    def output(self):
+        return self.input()
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source bwa-0.7.13
+                    set -euo pipefail
+
+                    bwa index {pe_assembly}
+
+        '''.format(pe_assembly=os.path.join(self.input().path))
+
+
+@inherits(BWAIndex)
 @inherits(CompressLMP)
 class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
@@ -481,7 +507,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def requires(self):
-        return {'contigs': self.clone(W2RapContigger, K=200),
+        return {'contigs': self.clone(BWAIndex),
                 'lmp': self.clone(CompressLMP)}
 
     def output(self):
@@ -491,8 +517,6 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         return '''#!/bin/bash
                     source bwa-0.7.13
                     set -euo pipefail
-
-                    #bwa index {pe_assembly}
 
                     bwa mem -SP -t {n_cpu} {pe_assembly} {R1} {R2} > {output}.temp
 
