@@ -347,7 +347,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.pe_libs]
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K)), "a.lines.fasta")
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K), "a.lines.fasta"))
 
     def work_script(self):
         output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
@@ -443,7 +443,7 @@ class ContigStats(sqla.CopyToTable):
         (["E-size", sqlalchemy.FLOAT], {}),
         (["max", sqlalchemy.FLOAT], {}),
         (["sum", sqlalchemy.FLOAT], {}),
-        (["path", sqlalchemy.String(10)], {})
+        (["path", sqlalchemy.String(500)], {})
     ]
 
     connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
@@ -453,8 +453,10 @@ class ContigStats(sqla.CopyToTable):
         super().__init__(*args, **kwargs)
 
     def get_abyss(self):
-        r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path),
+        r = subprocess.run("source abyss-1.9.0; abyss-fac " + self.input().path,
                            stdout=subprocess.PIPE, shell=True, universal_newlines=True)
+        r.check_returncode()
+        logger.info(r.stdout)
         values = r.stdout.split("\n")[1].split('\t')
         return [float(x) for x in values[:-1]] + [values[-1]]
 
@@ -462,9 +464,6 @@ class ContigStats(sqla.CopyToTable):
         abyss = self.get_abyss()
         self._rows = [[self.K] + abyss]
         return self._rows
-
-    def update_id(self):
-        return hash(str(self.input().path))
 
 # ------------------ LMP Insert Sizes -------------------------- #
 
@@ -483,7 +482,7 @@ class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
         return self.clone(W2RapContigger, K=200)
 
     def output(self):
-        return self.input()
+        return LocalTarget(self.input().path + '.bwt')
 
     def work_script(self):
         return '''#!/bin/bash
@@ -492,7 +491,7 @@ class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     bwa index {pe_assembly}
 
-        '''.format(pe_assembly=os.path.join(self.input().path))
+        '''.format(pe_assembly=self.input().path)
 
 
 @inherits(BWAIndex)
@@ -502,8 +501,8 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 750
-        self.n_cpu = 8
+        self.mem = 4000
+        self.n_cpu = 4
         self.partition = "tgac-medium"
 
     def requires(self):
@@ -521,7 +520,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
                     bwa mem -SP -t {n_cpu} {pe_assembly} {R1} {R2} > {output}.temp
 
                     mv {output}.temp {output}
-        '''.format(pe_assembly=os.path.join(self.input()['contigs'].path),
+        '''.format(pe_assembly=os.path.join(self.input()['contigs'].path[:-4]),
                    n_cpu=self.n_cpu,
                    R1=self.input()['lmp'][0].path,
                    R2=self.input()['lmp'][1].path,
@@ -684,8 +683,8 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 4000
-        self.n_cpu = 4
+        self.mem = 6000
+        self.n_cpu = 6
         self.partition = "tgac-medium"
 
     def requires(self):
@@ -705,7 +704,7 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         '''.format(output_prefix=self.output().path[:-8],
                    n_cpu=self.n_cpu,
                    reads=' '.join([x[0].path + ' ' + x[1].path for x in self.input()['pe']]),
-                   contigs=os.path.join(self.input()['contigs'].path))
+                   contigs=self.input()['contigs'].path)
 
 
 @inherits(KatHist)
@@ -741,7 +740,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-short"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + '.contig'))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -751,8 +750,8 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     $soap/s_prepare -g {prefix} -K 71 -c {contigs}
 
-        '''.format(contigs=os.path.join(self.input().path),
-                   cwd=self.input().path,
+        '''.format(contigs=self.input().path,
+                   cwd=os.path.dirname(self.output().path),
                    prefix=self.prefix + str(self.K))
 
 
@@ -797,7 +796,7 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + '.readOnContig.gz'))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
 
     def requires(self):
         return {'config': self.clone(SOAPConfig),
@@ -829,7 +828,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + '.readOnContig.gz'))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scaf'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -920,7 +919,7 @@ class Wrapper(luigi.WrapperTask):
     def requires(self):
         yield self.clone(LMPBatchWrapper)
         yield self.clone(PEBatchWrapper)
-        yield self.clone(KATBatchWrapper)
+        #yield self.clone(KATBatchWrapper)
         yield self.clone(Dipspades)
 
         for k in self.K_list:
