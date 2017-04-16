@@ -387,7 +387,7 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 300000
+        self.mem = 350000
         self.n_cpu = 24
         self.host = "uv2"
         self.rm_tmp = False
@@ -404,9 +404,9 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
         output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
                                             "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
 
-        pe = ' '.join(["--pe{i}-1 {R1} --pe{i}-2 {R2}".format(i=i+1, R1=x[0].path, R2=x[1].path)
+        pe = ' '.join(["--pe{i}-1 {R1} --pe{i}-2 {R2}".format(i=i + 1, R1=x[0].path, R2=x[1].path)
                       for i, x in enumerate(self.input()['pe'])])
-        lmp = ' '.join(["--mp{i}-1 {R1} --mp{i}-2 {R2}".format(i=i+1, R1=x[0].path, R2=x[1].path)
+        lmp = ' '.join(["--mp{i}-1 {R1} --mp{i}-2 {R2}".format(i=i + 1, R1=x[0].path, R2=x[1].path)
                        for i, x in enumerate(self.input()['lmp'])])
 
         return '''#!/bin/bash
@@ -424,7 +424,7 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
                   mv {output_dir}_temp {output_dir}
 
         '''.format(n_cpu=self.n_cpu,
-                   mem=int(0.9 * self.mem / 1000),
+                   mem=int(0.8 * self.mem / 1000),
                    output_dir=output,
                    pe=pe,
                    lmp=lmp)
