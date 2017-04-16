@@ -456,7 +456,7 @@ class ContigStats(sqla.CopyToTable):
     def get_abyss(self):
         r = subprocess.run("source abyss-1.9.0; abyss-fac " + os.path.join(self.input().path, 'a.lines.fasta'),
                            stdout=subprocess.PIPE, shell=True, universal_newlines=True)
-        values = r.split("\n")[1].split('\t')
+        values = r.stdout.split("\n")[1].split('\t')
         return [float(x) for x in values[:-1]] + [values[-1]]
 
     def rows(self):
