@@ -339,7 +339,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 300000 if self.K >= 200 else 450000
+        self.mem = 300000 if self.K >= 200 else 550000
         self.n_cpu = 24
         self.host = "uv2"
 
@@ -376,7 +376,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly', str(self.K)),
                    n_cpu=self.n_cpu,
                    K=self.K,
-                   mem=int(0.90 * self.mem / 1000),
+                   mem=int(0.85 * self.mem / 1000),
                    output_dir=os.path.split(output)[0],
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
 
