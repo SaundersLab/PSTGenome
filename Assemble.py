@@ -740,7 +740,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-short"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -796,7 +796,7 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
 
     def requires(self):
         return {'config': self.clone(SOAPConfig),
@@ -828,7 +828,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scaf'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scafSeq'))
 
     def work_script(self):
         return '''#!/bin/bash
