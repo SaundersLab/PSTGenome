@@ -844,6 +844,74 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
                    prefix=self.prefix + str(self.K))
 
 
+@requires(SOAPScaff)
+class ScaffoldStats(sqla.CopyToTable):
+    columns = [
+        (["K", sqlalchemy.INTEGER], {}),
+        (["n", sqlalchemy.FLOAT], {}),
+        (["n:500", sqlalchemy.FLOAT], {}),
+        (["L50", sqlalchemy.FLOAT], {}),
+        (["min", sqlalchemy.FLOAT], {}),
+        (["N80", sqlalchemy.FLOAT], {}),
+        (["N50", sqlalchemy.FLOAT], {}),
+        (["N20", sqlalchemy.FLOAT], {}),
+        (["E-size", sqlalchemy.FLOAT], {}),
+        (["max", sqlalchemy.FLOAT], {}),
+        (["sum", sqlalchemy.FLOAT], {}),
+        (["path", sqlalchemy.String(500)], {})
+    ]
+
+    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
+    table = "Scaffolds"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def get_abyss(self):
+        r = subprocess.run("source abyss-1.9.0; abyss-fac " + self.input().path,
+                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
+        r.check_returncode()
+        logger.info(r.stdout)
+        values = r.stdout.split("\n")[1].split('\t')
+        return [float(x) for x in values[:-1]] + [values[-1]]
+
+    def rows(self):
+        abyss = self.get_abyss()
+        self._rows = [[self.K] + abyss]
+        return self._rows
+
+
+@requires(SOAPScaff)
+class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 6000
+        self.n_cpu = 1
+        self.partition = "tgac-medium"
+        self.rm_tmp = False
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scaf.fasta'))
+
+    def work_script(self):
+        soap_base = self.input().path[:-5]
+
+        return '''#!/bin/bash
+                    source python-2.7.11
+                    set -euo pipefail
+
+                    export SOAP_n_remapper='/usr/users/ga004/buntingd/w2rap/SOAP_n_remapper.py'
+
+                    /tgac/software/testing/python/2.7.11/x86_64/bin/python $SOAP_n_remapper {contig_pos_in_scaff} {scaffolds_file} {contigs_file} {output}.temp
+
+                    mv {output}.temp {output}
+        '''.format(contig_pos_in_scaff=soap_base + '.contigPosInscaff',
+                   scaffolds_file=soap_base + '.scaf',
+                   contigs_file=soap_base + '.contig',
+                   output=self.output().path)
+
 # ------------------ Wrapper Tasks -------------------------- #
 
 
@@ -906,7 +974,7 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(PEBatchWrapper)
 @inherits(LMPBatchWrapper)
 @inherits(ContigStats)
-@inherits(SOAPScaff)
+@inherits(SOAPNremap)
 @inherits(KATBatchWrapper)
 @inherits(KatCompContigs)
 @inherits(Dipspades)
@@ -919,12 +987,13 @@ class Wrapper(luigi.WrapperTask):
     def requires(self):
         yield self.clone(LMPBatchWrapper)
         yield self.clone(PEBatchWrapper)
-        #yield self.clone(KATBatchWrapper)
+        yield self.clone(KATBatchWrapper)
         yield self.clone(Dipspades)
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
-            yield self.clone(SOAPScaff, K=k)
+            yield self.clone(ScaffoldStats, K=k)
+            yield self.clone(SOAPNremap, K=k)
             for lib in self.pe_libs:
                 yield self.clone(KatCompContigs, K=k, library=lib)
 
