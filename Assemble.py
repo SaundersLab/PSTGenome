@@ -896,7 +896,7 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scaf.fasta'))
 
     def work_script(self):
-        soap_base = self.input().path[:-5]
+        soap_base = self.input().path[:-8]
 
         return '''#!/bin/bash
                     source python-2.7.11
@@ -908,7 +908,7 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     mv {output}.temp {output}
         '''.format(contig_pos_in_scaff=soap_base + '.contigPosInscaff',
-                   scaffolds_file=soap_base + '.scaf',
+                   scaffolds_file=soap_base + '.scafSeq',
                    contigs_file=soap_base + '.contig',
                    output=self.output().path)
 
