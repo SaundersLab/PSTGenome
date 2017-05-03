@@ -34,6 +34,31 @@ INSERT_SIZES = {'LIB17363': 400, 'LIB26234': 800,
                 'LIB19834': 4000, 'LIB19835': 3500,
                 'LIB19836': 2500, 'LIB19837': 2100}
 
+
+# ------------------ Util Tasks -------------------------- #
+
+
+class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "tgac-short"
+
+    def output(self):
+        return LocalTarget(self.input().path + '.bwt')
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source bwa-0.7.13
+                    set -euo pipefail
+
+                    bwa index {fasta}
+
+        '''.format(fasta=self.input().path)
+
 # ------------------ Shared QC -------------------------- #
 
 
@@ -467,36 +492,15 @@ class ContigStats(sqla.CopyToTable):
         self._rows = [[self.K] + abyss]
         return self._rows
 
+
+@requires(W2RapContigger)
+class BWAIndexContigs(BWAIndex):
+    pass
+
 # ------------------ LMP Insert Sizes -------------------------- #
 
 
-@inherits(W2RapContigger)
-class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 8000
-        self.n_cpu = 1
-        self.partition = "tgac-medium"
-
-    def requires(self):
-        return self.clone(W2RapContigger, K=200)
-
-    def output(self):
-        return LocalTarget(self.input().path + '.bwt')
-
-    def work_script(self):
-        return '''#!/bin/bash
-                    source bwa-0.7.13
-                    set -euo pipefail
-
-                    bwa index {pe_assembly}
-
-        '''.format(pe_assembly=self.input().path)
-
-
-@inherits(BWAIndex)
+@inherits(BWAIndexContigs)
 @inherits(CompressLMP)
 class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
@@ -508,7 +512,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def requires(self):
-        return {'contigs': self.clone(BWAIndex),
+        return {'contigs': self.clone(BWAIndexContigs, K=200),
                 'lmp': self.clone(CompressLMP)}
 
     def output(self):
@@ -914,6 +918,11 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
                    contigs_file=soap_base + '.contig',
                    output=self.output().path)
 
+
+@requires(SOAPNremap)
+class BWAIndexScaffolds(BWAIndex):
+    pass
+
 # ------------------ Linked Reads  -------------------------- #
 
 
@@ -951,9 +960,9 @@ class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
                    output=self.output().path)
 
 
-@inherits(BWAIndex)
+@inherits(BWAIndexContigs)
 @inherits(BAMtoFASTQ)
-class MapLinkedReads(CheckTargetNonEmpty, SlurmExecutableTask):
+class MapLinkedReadsContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -963,55 +972,35 @@ class MapLinkedReads(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def requires(self):
-        return {'contigs': self.clone(BWAIndex),
+        return {'contigs': self.clone(BWAIndexContigs),
                 'reads': self.clone(BAMtoFASTQ)}
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", "K" + str(self.K), "barcoded_aligned.sam"))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", 'contigs', "K" + str(self.K), "barcoded_aligned.bam"))
 
     def work_script(self):
         return '''#!/bin/bash
                     source bwa-0.7.13
+                    source samtools-1.4
                     set -euo pipefail
 
-                    bwa mem -t {n_cpu} -p {pe_assembly} {reads} > {output}.temp
+                    cd {cwd}
+
+                    bwa mem -t {n_cpu} -p {pe_assembly} {reads} |
+                    samtools view -Sb - |
+                    samtools sort -n - > {output}.temp
 
                     mv {output}.temp {output}
         '''.format(pe_assembly=os.path.join(self.input()['contigs'].path[:-4]),
-                   n_cpu=self.n_cpu,
+                   n_cpu=self.n_cpu - 2,
                    reads=self.input()['reads'].path,
-                   output=self.output().path)
+                   output=self.output().path,
+                   cwd=os.path.dirname(self.output().path))
 
 
-@requires(MapLinkedReads)
-class SortLR(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 1000
-        self.n_cpu = 16
-        self.partition = "tgac-medium"
-
-    def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", "K" + str(self.K), "barcoded_aligned.bam"))
-
-    def work_script(self):
-        return '''#!/bin/bash
-               source samtools-1.4
-               set -euo pipefail
-
-               samtools sort -n -@ {n_cpu} --output-fmt BAM -o {output}.temp {input}
-
-               mv {output}.temp {output}
-                '''.format(input=self.input().path,
-                           output=self.output().path,
-                           n_cpu=self.n_cpu)
-
-
-@inherits(SortLR)
+@inherits(MapLinkedReadsContigs)
 @inherits(W2RapContigger)
-class ARCS(CheckTargetNonEmpty, SlurmExecutableTask):
+class ArcsLinksContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1019,101 +1008,140 @@ class ARCS(CheckTargetNonEmpty, SlurmExecutableTask):
         self.mem = 8000
         self.n_cpu = 1
         self.partition = "tgac-medium"
-        self.rm_tmp = False
 
     def requires(self):
         return {'contigs': self.clone(W2RapContigger),
-                'reads': self.clone(SortLR)}
+                'reads': self.clone(MapLinkedReadsContigs)}
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', "K" + str(self.K), "K" + str(self.K) + ".gv"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', 'contigs', "K" + str(self.K), "K" + str(self.K) + ".scaffolds.fa"))
 
     def work_script(self):
         self.temp = TemporaryFile()
 
         return '''#!/bin/bash
                source ARCS-1.0.0
-               set -euo pipefail
-
-               echo '{reads}' > {temp}
-               arcs -f {contigs} -a {temp} -b {output_temp}
-
-               mv {output_temp}_original.gv {output}
-                '''.format(contigs=self.input()['contigs'].path,
-                           reads=self.input()['reads'].path,
-                           output=self.output().path,
-                           temp=self.temp.path,
-                           output_temp=os.path.join(self.scratch_dir, PIPELINE, VERSION, 'linked_reads/ARCS_') + str(self.K))
-
-
-@inherits(W2RapContigger)
-@inherits(ARCS)
-class MakeTSVFile(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 8000
-        self.n_cpu = 1
-        self.partition = "tgac-medium"
-        self.rm_tmp = False
-
-    def requires(self):
-        return {'contigs': self.clone(W2RapContigger),
-                'graph': self.clone(ARCS)}
-
-    def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION,'linked_reads', "K" + str(self.K), 'links', 'K' + str(self.K) + ".tigpair_checkpoint.tsv"))
-
-    def work_script(self):
-        return '''#!/bin/bash
-               source ARCS-1.0.0
-               set -euo pipefail
-
-               makeTSVfile.py {graph} {output}.temp {contigs}
-
-               mv {output}.temp {output}
-                '''.format(output=self.output().path,
-                           contigs=self.input()['contigs'].path,
-                           graph=self.input()['graph'].path)
-
-
-@inherits(W2RapContigger)
-@inherits(MakeTSVFile)
-class LINKS(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 8000
-        self.n_cpu = 1
-        self.partition = "tgac-medium"
-
-    def requires(self):
-        return {'contigs': self.clone(W2RapContigger),
-                'tsv': self.clone(MakeTSVFile)}
-
-    def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', "K" + str(self.K), 'links', str(self.K) + ".scaffolds.fa"))
-
-    def work_script(self):
-        return '''#!/bin/bash
                source LINKS-1.8.5
+               mkdir -p {output}_temp
+               set -euo pipefail
 
-               cd {cwd}
+               cd {output}_temp
+               echo '{reads}' > {temp}
+
+               echo 'Starting ARCS'
+               arcs -v -f {contigs} -a {temp} -b {prefix}
+
+               echo 'Starting makeTSVfile'
+               makeTSVfile.py {prefix}_original.gv {prefix}.tigpair_checkpoint.tsv {contigs}
+
+               echo 'Starting LINKS'
                perl /tgac/software/testing/LINKS/1.8.5/x86_64/LINKS -f {contigs} \
                                                                     -s /dev/null \
                                                                     -k 20 \
-                                                                    -b {tsv} \
+                                                                    -b {prefix} \
                                                                     -l 5 \
                                                                     -t 2 \
-                                                                    -a 0.3
+                                                                    -a 0.7
+               echo 'done'
+               mv {output}_temp {output}
+                '''.format(contigs=self.input()['contigs'].path,
+                           reads=self.input()['reads'].path,
+                           output=os.path.dirname(self.output().path),
+                           temp=self.temp.path,
+                           prefix="K" + str(self.K))
 
-               #mv {output}.temp {output}
-                '''.format(tsv=self.input()['tsv'].path[:-23],
-                           contigs=self.input()['contigs'].path,
-                           output=self.output().path,
-                           cwd=os.path.dirname(self.input()['tsv'].path))
+
+@inherits(BWAIndexScaffolds)
+@inherits(BAMtoFASTQ)
+class MapLinkedReadsScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 500
+        self.n_cpu = 24
+        self.partition = "tgac-medium"
+
+    def requires(self):
+        return {'contigs': self.clone(BWAIndexScaffolds),
+                'reads': self.clone(BAMtoFASTQ)}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", 'scaffolds', "K" + str(self.K), "barcoded_aligned.bam"))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source bwa-0.7.13
+                    source samtools-1.4
+                    set -euo pipefail
+
+                    cd {cwd}
+
+                    bwa mem -t {n_cpu} -p {pe_assembly} {reads} |
+                    samtools view -Sb - |
+                    samtools sort -n - > {output}.temp
+
+                    mv {output}.temp {output}
+        '''.format(pe_assembly=os.path.join(self.input()['contigs'].path[:-4]),
+                   n_cpu=self.n_cpu - 2,
+                   reads=self.input()['reads'].path,
+                   output=self.output().path,
+                   cwd=os.path.dirname(self.output().path))
+
+
+@inherits(MapLinkedReadsScaffolds)
+@inherits(SOAPNremap)
+class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "tgac-medium"
+
+    def requires(self):
+        return {'contigs': self.clone(SOAPNremap),
+                'reads': self.clone(MapLinkedReadsScaffolds)}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', 'scaffolds', "K" + str(self.K), "K" + str(self.K) + ".scaffolds.fa"))
+
+    def work_script(self):
+        self.temp = TemporaryFile()
+
+        return '''#!/bin/bash
+               source ARCS-1.0.0
+               source LINKS-1.8.5
+               mkdir -p {output}_temp
+               set -euo pipefail
+
+               cd {output}_temp
+               echo '{reads}' > {temp}
+
+               echo 'Starting ARCS'
+               arcs -v -f {contigs} -a {temp} -b {prefix}
+
+               echo 'Starting makeTSVfile'
+               makeTSVfile.py {prefix}_original.gv {prefix}.tigpair_checkpoint.tsv {contigs}
+
+               echo 'Starting LINKS'
+               perl /tgac/software/testing/LINKS/1.8.5/x86_64/LINKS -f {contigs} \
+                                                                    -s /dev/null \
+                                                                    -k 20 \
+                                                                    -b {prefix} \
+                                                                    -l 5 \
+                                                                    -t 2 \
+                                                                    -a 0.7
+                # The ARCS paper recommends a = 0.7-0.9
+                # The arcs -e parameter is the length of the ends, should be smaller for smaller conitgs
+               echo 'done'
+               mv {output}_temp {output}
+                '''.format(contigs=self.input()['contigs'].path,
+                           reads=self.input()['reads'].path,
+                           output=os.path.dirname(self.output().path),
+                           temp=self.temp.path,
+                           prefix="K" + str(self.K))
 
 # ------------------ Wrapper Tasks -------------------------- #
 
@@ -1181,7 +1209,8 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(KATBatchWrapper)
 @inherits(KatCompContigs)
 @inherits(Dipspades)
-@inherits(LINKS)
+@inherits(ArcsLinksContigs)
+@inherits(ArcsLinksScaffolds)
 class Wrapper(luigi.WrapperTask):
     library = None
     K = None
@@ -1198,7 +1227,9 @@ class Wrapper(luigi.WrapperTask):
             yield self.clone(ContigStats, K=k)
             yield self.clone(ScaffoldStats, K=k)
             yield self.clone(SOAPNremap, K=k)
-            yield self.clone(LINKS, K=k)
+            yield self.clone(ArcsLinksScaffolds, K=k)
+            yield self.clone(ArcsLinksContigs, K=k)
+
             for lib in self.pe_libs:
                 yield self.clone(KatCompContigs, K=k, library=lib)
 
