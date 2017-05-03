@@ -59,6 +59,42 @@ class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
 
         '''.format(fasta=self.input().path)
 
+
+class AbyssFac(sqla.CopyToTable):
+    columns = [
+        (["K", sqlalchemy.INTEGER], {}),
+        (["n", sqlalchemy.FLOAT], {}),
+        (["n:500", sqlalchemy.FLOAT], {}),
+        (["L50", sqlalchemy.FLOAT], {}),
+        (["min", sqlalchemy.FLOAT], {}),
+        (["N80", sqlalchemy.FLOAT], {}),
+        (["N50", sqlalchemy.FLOAT], {}),
+        (["N20", sqlalchemy.FLOAT], {}),
+        (["E-size", sqlalchemy.FLOAT], {}),
+        (["max", sqlalchemy.FLOAT], {}),
+        (["sum", sqlalchemy.FLOAT], {}),
+        (["path", sqlalchemy.String(500)], {})
+    ]
+
+    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
+    table = "abyssfac"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def get_abyss(self):
+        r = subprocess.run("source abyss-1.9.0; abyss-fac " + self.input().path,
+                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
+        r.check_returncode()
+        logger.info(r.stdout)
+        values = r.stdout.split("\n")[1].split('\t')
+        return [float(x) for x in values[:-1]] + [values[-1]]
+
+    def rows(self):
+        abyss = self.get_abyss()
+        self._rows = [[self.K] + abyss]
+        return self._rows
+
 # ------------------ Shared QC -------------------------- #
 
 
@@ -457,40 +493,8 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
 
 
 @requires(W2RapContigger)
-class ContigStats(sqla.CopyToTable):
-    columns = [
-        (["K", sqlalchemy.INTEGER], {}),
-        (["n", sqlalchemy.FLOAT], {}),
-        (["n:500", sqlalchemy.FLOAT], {}),
-        (["L50", sqlalchemy.FLOAT], {}),
-        (["min", sqlalchemy.FLOAT], {}),
-        (["N80", sqlalchemy.FLOAT], {}),
-        (["N50", sqlalchemy.FLOAT], {}),
-        (["N20", sqlalchemy.FLOAT], {}),
-        (["E-size", sqlalchemy.FLOAT], {}),
-        (["max", sqlalchemy.FLOAT], {}),
-        (["sum", sqlalchemy.FLOAT], {}),
-        (["path", sqlalchemy.String(500)], {})
-    ]
-
-    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
-    table = "W2Rap"
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def get_abyss(self):
-        r = subprocess.run("source abyss-1.9.0; abyss-fac " + self.input().path,
-                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
-        r.check_returncode()
-        logger.info(r.stdout)
-        values = r.stdout.split("\n")[1].split('\t')
-        return [float(x) for x in values[:-1]] + [values[-1]]
-
-    def rows(self):
-        abyss = self.get_abyss()
-        self._rows = [[self.K] + abyss]
-        return self._rows
+class ContigStats(AbyssFac):
+    pass
 
 
 @requires(W2RapContigger)
@@ -851,40 +855,8 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
 
 
 @requires(SOAPScaff)
-class ScaffoldStats(sqla.CopyToTable):
-    columns = [
-        (["K", sqlalchemy.INTEGER], {}),
-        (["n", sqlalchemy.FLOAT], {}),
-        (["n:500", sqlalchemy.FLOAT], {}),
-        (["L50", sqlalchemy.FLOAT], {}),
-        (["min", sqlalchemy.FLOAT], {}),
-        (["N80", sqlalchemy.FLOAT], {}),
-        (["N50", sqlalchemy.FLOAT], {}),
-        (["N20", sqlalchemy.FLOAT], {}),
-        (["E-size", sqlalchemy.FLOAT], {}),
-        (["max", sqlalchemy.FLOAT], {}),
-        (["sum", sqlalchemy.FLOAT], {}),
-        (["path", sqlalchemy.String(500)], {})
-    ]
-
-    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
-    table = "Scaffolds"
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def get_abyss(self):
-        r = subprocess.run("source abyss-1.9.0; abyss-fac " + self.input().path,
-                           stdout=subprocess.PIPE, shell=True, universal_newlines=True)
-        r.check_returncode()
-        logger.info(r.stdout)
-        values = r.stdout.split("\n")[1].split('\t')
-        return [float(x) for x in values[:-1]] + [values[-1]]
-
-    def rows(self):
-        abyss = self.get_abyss()
-        self._rows = [[self.K] + abyss]
-        return self._rows
+class ScaffoldStats(AbyssFac):
+    pass
 
 
 @requires(SOAPScaff)
@@ -1143,6 +1115,10 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
                            temp=self.temp.path,
                            prefix="K" + str(self.K))
 
+
+@requires(ArcsLinksScaffolds)
+class ARCSStats(AbyssFac):
+    pass
 # ------------------ Wrapper Tasks -------------------------- #
 
 
@@ -1209,8 +1185,7 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(KATBatchWrapper)
 @inherits(KatCompContigs)
 @inherits(Dipspades)
-@inherits(ArcsLinksContigs)
-@inherits(ArcsLinksScaffolds)
+@inherits(ARCSStats)
 class Wrapper(luigi.WrapperTask):
     library = None
     K = None
@@ -1227,8 +1202,7 @@ class Wrapper(luigi.WrapperTask):
             yield self.clone(ContigStats, K=k)
             yield self.clone(ScaffoldStats, K=k)
             yield self.clone(SOAPNremap, K=k)
-            yield self.clone(ArcsLinksScaffolds, K=k)
-            yield self.clone(ArcsLinksContigs, K=k)
+            yield self.clone(ARCSStats, K=k)
 
             for lib in self.pe_libs:
                 yield self.clone(KatCompContigs, K=k, library=lib)
