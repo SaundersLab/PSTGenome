@@ -1131,6 +1131,63 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
 @requires(ArcsLinksScaffolds)
 class ARCSStats(AbyssFac):
     pass
+
+
+# ------------------ Supernova -------------------------- #
+
+
+class SupernovaMegabubbles(luigi.ExternalTask):
+    def output(self):
+        return LocalTarget("/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/supernova/pst88/fasta/megabubbles.fasta.gz")
+
+
+@requires(SupernovaMegabubbles)
+class BWAIndexMegabubbles(BWAIndex):
+    pass
+
+
+@inherits(BWAIndexMegabubbles)
+@inherits(W2RapContigger)
+class MapContigsMegabubbles(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 200
+        self.n_cpu = 4
+        self.partition = "tgac-medium"
+
+    def requires(self):
+        return {'contigs': self.clone(BWAIndexMegabubbles),
+                'reads': self.clone(W2RapContigger)}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "supernova", 'megabubbles', "K" + str(self.K), "mapped.bam"))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source bwa-0.7.13
+                    source samtools-1.4
+                    set -euo pipefail
+
+                    cd {cwd}
+
+                    bwa mem -t {n_cpu} -p {pe_assembly} {reads} |
+                    samtools view -Sb - >{output}.temp
+
+                    mv {output}.temp {output}
+        '''.format(pe_assembly=os.path.join(self.input()['contigs'].path[:-4]),
+                   n_cpu=self.n_cpu - 1,
+                   reads=self.input()['reads'].path,
+                   output=self.output().path,
+                   cwd=os.path.dirname(self.output().path))
+
+
+class SupernovaPseudoHaps(luigi.ExternalTask):
+    def output(self):
+        return [LocalTarget("/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/supernova/pst88/fasta/pseudohap2.1.fasta.gz"),
+                LocalTarget("/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/supernova/pst88/fasta/pseudohap2.2.fasta.gz")]
+
 # ------------------ Wrapper Tasks -------------------------- #
 
 
@@ -1198,6 +1255,7 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(KatCompContigs)
 @inherits(Dipspades)
 @inherits(ARCSStats)
+@inherits(MapContigsMegabubbles)
 class Wrapper(luigi.WrapperTask):
     library = None
     K = None
@@ -1208,7 +1266,9 @@ class Wrapper(luigi.WrapperTask):
         yield self.clone(LMPBatchWrapper)
         yield self.clone(PEBatchWrapper)
         yield self.clone(KATBatchWrapper)
-        yield self.clone(Dipspades)
+        yield self.clone(MapContigsMegabubbles, K=280)
+
+        #yield self.clone(Dipspades)
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
