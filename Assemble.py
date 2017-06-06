@@ -1027,7 +1027,7 @@ class ArcsLinksContigs(CheckTargetNonEmpty, SlurmExecutableTask):
                                                                     -t 2 \
                                                                     -a 0.7
                echo 'done'
-               mv {output}_temp {output}
+               mv -T {output}_temp {output}
                 '''.format(contigs=self.input()['contigs'].path,
                            reads=self.input()['reads'].path,
                            output=os.path.dirname(self.output().path),
@@ -1120,7 +1120,7 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
                 # The ARCS paper recommends a = 0.7-0.9
                 # The arcs -e parameter is the length of the ends, should be smaller for smaller conitgs
                echo 'done'
-               mv {output}_temp {output}
+               mv -T {output}_temp {output}
                 '''.format(contigs=self.input()['contigs'].path,
                            reads=self.input()['reads'].path,
                            output=os.path.dirname(self.output().path),
