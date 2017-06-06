@@ -62,6 +62,7 @@ class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
 
 class AbyssFac(sqla.CopyToTable):
     columns = [
+        (["Task", sqlalchemy.String(20)], {}),
         (["K", sqlalchemy.INTEGER], {}),
         (["n", sqlalchemy.FLOAT], {}),
         (["n:500", sqlalchemy.FLOAT], {}),
@@ -86,13 +87,12 @@ class AbyssFac(sqla.CopyToTable):
         r = subprocess.run("source abyss-1.9.0; abyss-fac " + self.input().path,
                            stdout=subprocess.PIPE, shell=True, universal_newlines=True)
         r.check_returncode()
-        logger.info(r.stdout)
         values = r.stdout.split("\n")[1].split('\t')
         return [float(x) for x in values[:-1]] + [values[-1]]
 
     def rows(self):
         abyss = self.get_abyss()
-        self._rows = [[self.K] + abyss]
+        self._rows = [[self.get_task_family()[:20]] + [self.K] + abyss]
         return self._rows
 
 # ------------------ Shared QC -------------------------- #
