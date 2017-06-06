@@ -370,13 +370,51 @@ class CompressLMP(CheckTargetNonEmpty, SlurmExecutableTask):
                             R1_out=self.output()[0].path,
                             R2_out=self.output()[1].path)
 
+# ------------------ Linked Reads Specific -------------------------- #
+
+
+class LinkedReadsBAM(luigi.ExternalTask):
+    library = luigi.Parameter(default='linked_reads')
+
+    def output(self):
+        return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.bam')
+
+
+@requires(LinkedReadsBAM)
+class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 2000
+        self.n_cpu = 1
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.fastq.gz')
+
+    def work_script(self):
+
+        return '''#!/bin/bash
+                    source samtools-0.1.19
+                    set -euo pipefail
+
+                    samtools view {input} |
+                    perl -ne 'chomp; $line = $_;  if(/BX\:Z\:(\S{16})/){@s = split("\t", $line); print "$s[0]_$1\n$s[9]\n+\n$s[10]\n";}' |
+                    gzip -c > {output}.temp
+
+                    mv {output}.temp {output}
+        '''.format(input=self.input().path,
+                   output=self.output().path)
+
 # ------------------ Cleaned Reads -------------------------- #
 
 
 @inherits(Trimmomatic)
 @inherits(CompressLMP)
+@inherits(BAMtoFASTQ)
 class CleanedReads(luigi.WrapperTask):
-    '''The LMP and the PE post-QC reads come out of different
+    '''The LMP, LR and the PE post-QC reads come out of different
        points in the pipeline, this task reconciles that'''
 
     def requires(self):
@@ -384,11 +422,17 @@ class CleanedReads(luigi.WrapperTask):
             return self.clone(Trimmomatic, library=self.library)
         elif self.library in self.lmp_libs:
             return self.clone(CompressLMP, library=self.library)
+        elif self.library == 'linked_reads':
+            return self.clone(BAMtoFASTQ)
         else:
             raise Exception("Unknown library")
 
     def output(self):
-        return self.input()
+        # The Trimmomatic task is awkward and also returns the trimmomatic log
+        if self.library in self.pe_libs:
+            return self.input()[:2]
+        else:
+            return self.input()
 
 
 # ------------------ Contiging -------------------------- #
@@ -500,6 +544,7 @@ class ContigStats(AbyssFac):
 @requires(W2RapContigger)
 class BWAIndexContigs(BWAIndex):
     pass
+
 
 # ------------------ LMP Insert Sizes -------------------------- #
 
@@ -895,45 +940,12 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
 class BWAIndexScaffolds(BWAIndex):
     pass
 
+
 # ------------------ Linked Reads  -------------------------- #
 
 
-class LinkedReadsBAM(luigi.ExternalTask):
-
-    def output(self):
-        return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.bam')
-
-
-@requires(LinkedReadsBAM)
-class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 2000
-        self.n_cpu = 1
-        self.partition = "tgac-medium"
-
-    def output(self):
-        return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.fastq.gz')
-
-    def work_script(self):
-
-        return '''#!/bin/bash
-                    source samtools-0.1.19
-                    set -euo pipefail
-
-                    samtools view {input} |
-                    perl -ne 'chomp; $line = $_;  if(/BX\:Z\:(\S{16})/){@s = split("\t", $line); print "$s[0]_$1\n$s[9]\n+\n$s[10]\n";}' |
-                    gzip -c > {output}.temp
-
-                    mv {output}.temp {output}
-        '''.format(input=self.input().path,
-                   output=self.output().path)
-
-
 @inherits(BWAIndexContigs)
-@inherits(BAMtoFASTQ)
+@inherits(CleanedReads)
 class MapLinkedReadsContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -945,7 +957,7 @@ class MapLinkedReadsContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def requires(self):
         return {'contigs': self.clone(BWAIndexContigs),
-                'reads': self.clone(BAMtoFASTQ)}
+                'reads': self.clone(CleanedReads, library='linked_reads')}
 
     def output(self):
         return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", 'contigs', "K" + str(self.K), "barcoded_aligned.bam"))
