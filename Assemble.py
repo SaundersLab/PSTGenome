@@ -1132,6 +1132,112 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
 class ARCSStats(AbyssFac):
     pass
 
+# ------------------ Gap Filling -------------------------- #
+
+
+@requires(CleanedReads)
+class AbyssBloomBuild(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    bloom_k = luigi.IntParameter()
+    bloom_size = luigi.Parameter()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 1000
+        self.n_cpu = 10
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "bloomfilters", str(self.bloom_k), self.library + ".bloom"))
+
+    def work_script(self):
+        input = ' '.join([x.path for x in self.input()]) if isinstance(self.input(), list) else self.input().path
+        return '''#!/bin/bash
+                    source abyss-2.0.2;
+                    set -euo pipefail
+
+                    abyss-bloom build -k{k} -b{size} -j{n_cpu} {output}.temp {input}
+
+                    mv {output}.temp {output}
+        '''.format(k=self.bloom_k,
+                   size=self.bloom_size,
+                   input=input,
+                   n_cpu=self.n_cpu,
+                   output=self.output().path)
+
+
+@inherits(AbyssBloomBuild)
+class AbyssBloomUnion(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    bloom_size = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 1500
+        self.n_cpu = 10
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "bloomfilters", str(self.bloom_k), "union.bloom"))
+
+    def requires(self):
+        ret = []
+        for lib in self.lmp_libs:
+            ret.append(self.clone(AbyssBloomBuild, library=lib, bloom_k=self.bloom_k, bloom_size='500M'))
+        for lib in list(self.pe_libs) + ['linked_reads', ]:
+            ret.append(self.clone(AbyssBloomBuild, library=lib, bloom_k=self.bloom_k, bloom_size='5G'))
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source abyss-2.0.2;
+                    set -euo pipefail
+
+                    abyss-bloom build -k{k} -b{size} -j{n_cpu} {output}.temp {input}
+
+                    mv {output}.temp {output}
+        '''.format(k=self.bloom_k,
+                   size='10G',
+                   input=' '.join([x.path for x in self.input()]),
+                   n_cpu=self.n_cpu,
+                   output=self.output().path)
+
+
+@inherits(SOAPNremap)
+@inherits(AbyssBloomUnion)
+class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    sealer_klist = luigi.ListParameter()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 1500
+        self.n_cpu = 10
+        self.partition = "tgac-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K) + "_scaffold.fa"))
+
+    def requires(self):
+        return {'bloomfilters': [self.clone(AbyssBloomUnion, bloom_k=k) for k in self.sealer_klist],
+                'scaffolds': self.clone(SOAPNremap)}
+
+    def work_script(self):
+        return '''#!/bin/bash
+                    source abyss-2.0.2;
+                    set -euo pipefail
+
+                    abyss-sealer {k_args} -P1 -j {n_cpu} -o {output} -S {scaffolds} {bloomfilters}
+
+                    mv {output}.temp {output}
+        '''.format(k_args=' '.join(['-k' + str(k) for k in self.sealer_klist]),
+                   bloomfilters=' '.join(['-i ' + x.path for x in self.input()['bloomfilters']]),
+                   scaffolds=self.input()['scaffolds'].path,
+                   n_cpu=self.n_cpu,
+                   output=self.output().path[:-12])
+
 
 # ------------------ Supernova -------------------------- #
 
@@ -1256,10 +1362,12 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(Dipspades)
 @inherits(ARCSStats)
 @inherits(MapContigsMegabubbles)
+@inherits(AbyssBloomBuild)
 class Wrapper(luigi.WrapperTask):
     library = None
     K = None
-
+    bloom_k = None
+    bloom_size = None
     K_list = luigi.ListParameter(default=[200])
 
     def requires(self):
@@ -1275,12 +1383,19 @@ class Wrapper(luigi.WrapperTask):
             yield self.clone(ScaffoldStats, K=k)
             yield self.clone(SOAPNremap, K=k)
             yield self.clone(ARCSStats, K=k)
+            yield self.clone(AbyssSealer, K=k, sealer_klist=[30, 40, 50, 60, 70, 80, 90])
 
             for lib in self.pe_libs:
                 yield self.clone(KatCompContigs, K=k, library=lib)
 
+        for k in [30, 40, 50, 60, 70, 80, 90]:
+            for lib in self.lmp_libs:
+                yield self.clone(AbyssBloomBuild, library=lib, bloom_k=k, bloom_size='500M')
+            for lib in list(self.pe_libs) + ['linked_reads', ]:
+                yield self.clone(AbyssBloomBuild, library=lib, bloom_k=k, bloom_size='5G')
 
 # ----------------------------------------------------------------------------------------------------- #
+
 
 if __name__ == '__main__':
     os.environ['TMPDIR'] = "/tgac/scratch/buntingd"
