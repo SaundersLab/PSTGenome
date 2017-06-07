@@ -425,7 +425,7 @@ class CleanedReads(luigi.WrapperTask):
         elif self.library == 'linked_reads':
             return self.clone(BAMtoFASTQ)
         else:
-            raise Exception("Unknown library")
+            raise Exception("Unknown library " + str(self.library))
 
     def output(self):
         # The Trimmomatic task is awkward and also returns the trimmomatic log
@@ -1135,61 +1135,26 @@ class ARCSStats(AbyssFac):
 # ------------------ Gap Filling -------------------------- #
 
 
-@requires(CleanedReads)
+@inherits(CleanedReads)
 class AbyssBloomBuild(CheckTargetNonEmpty, SlurmExecutableTask):
 
     bloom_k = luigi.IntParameter()
-    bloom_size = luigi.Parameter()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 1000
-        self.n_cpu = 10
+        self.mem = 750
+        self.n_cpu = 20
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "bloomfilters", str(self.bloom_k), self.library + ".bloom"))
-
-    def work_script(self):
-        input = ' '.join([x.path for x in self.input()]) if isinstance(self.input(), list) else self.input().path
-        return '''#!/bin/bash
-                    source abyss-2.0.2;
-                    set -euo pipefail
-
-                    abyss-bloom build -k{k} -b{size} -j{n_cpu} {output}.temp {input}
-
-                    mv {output}.temp {output}
-        '''.format(k=self.bloom_k,
-                   size=self.bloom_size,
-                   input=input,
-                   n_cpu=self.n_cpu,
-                   output=self.output().path)
-
-
-@inherits(AbyssBloomBuild)
-class AbyssBloomUnion(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    bloom_size = None
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 1500
-        self.n_cpu = 10
-        self.partition = "tgac-medium"
-
-    def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "bloomfilters", str(self.bloom_k), "union.bloom"))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "bloomfilters", str(self.bloom_k) + ".bloom"))
 
     def requires(self):
-        ret = []
-        for lib in self.lmp_libs:
-            ret.append(self.clone(AbyssBloomBuild, library=lib, bloom_k=self.bloom_k, bloom_size='500M'))
-        for lib in list(self.pe_libs) + ['linked_reads', ]:
-            ret.append(self.clone(AbyssBloomBuild, library=lib, bloom_k=self.bloom_k, bloom_size='5G'))
+        return [self.clone(CleanedReads, library=lib) for lib in list(self.lmp_libs) + list(self.pe_libs) + ['linked_reads']]
 
     def work_script(self):
+        input = [' '.join([x.path for x in y]) if isinstance(y, list) else y.path for y in self.input()]
         return '''#!/bin/bash
                     source abyss-2.0.2;
                     set -euo pipefail
@@ -1199,13 +1164,13 @@ class AbyssBloomUnion(CheckTargetNonEmpty, SlurmExecutableTask):
                     mv {output}.temp {output}
         '''.format(k=self.bloom_k,
                    size='10G',
-                   input=' '.join([x.path for x in self.input()]),
+                   input=' '.join(input),
                    n_cpu=self.n_cpu,
                    output=self.output().path)
 
 
 @inherits(SOAPNremap)
-@inherits(AbyssBloomUnion)
+@inherits(AbyssBloomBuild)
 class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
 
     sealer_klist = luigi.ListParameter()
@@ -1213,30 +1178,32 @@ class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 1500
-        self.n_cpu = 10
+        self.mem = 700
+        self.n_cpu = 20
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K) + "_scaffold.fa"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K), 'K' + str(self.K) + "_scaffold.fa"))
 
     def requires(self):
-        return {'bloomfilters': [self.clone(AbyssBloomUnion, bloom_k=k) for k in self.sealer_klist],
+        return {'bloomfilters': [self.clone(AbyssBloomBuild, bloom_k=k) for k in self.sealer_klist],
                 'scaffolds': self.clone(SOAPNremap)}
 
     def work_script(self):
         return '''#!/bin/bash
                     source abyss-2.0.2;
+                    mkdir -p {output}/temp
                     set -euo pipefail
 
-                    abyss-sealer {k_args} -P1 -j {n_cpu} -o {output} -S {scaffolds} {bloomfilters}
+                    abyss-sealer {k_args} -P25 --flank-length=150 -j {n_cpu} -o {output}/temp/{prefix} -S {scaffolds} {bloomfilters}
 
-                    mv {output}.temp {output}
+                    mv {output}/temp/{prefix}* {output}/
         '''.format(k_args=' '.join(['-k' + str(k) for k in self.sealer_klist]),
                    bloomfilters=' '.join(['-i ' + x.path for x in self.input()['bloomfilters']]),
                    scaffolds=self.input()['scaffolds'].path,
                    n_cpu=self.n_cpu,
-                   output=self.output().path[:-12])
+                   output=os.path.dirname(self.output().path),
+                   prefix='K' + str(self.K))
 
 
 # ------------------ Supernova -------------------------- #
@@ -1383,16 +1350,10 @@ class Wrapper(luigi.WrapperTask):
             yield self.clone(ScaffoldStats, K=k)
             yield self.clone(SOAPNremap, K=k)
             yield self.clone(ARCSStats, K=k)
-            yield self.clone(AbyssSealer, K=k, sealer_klist=[30, 40, 50, 60, 70, 80, 90])
+            yield self.clone(AbyssSealer, K=k, sealer_klist=[30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 128])
 
             for lib in self.pe_libs:
                 yield self.clone(KatCompContigs, K=k, library=lib)
-
-        for k in [30, 40, 50, 60, 70, 80, 90]:
-            for lib in self.lmp_libs:
-                yield self.clone(AbyssBloomBuild, library=lib, bloom_k=k, bloom_size='500M')
-            for lib in list(self.pe_libs) + ['linked_reads', ]:
-                yield self.clone(AbyssBloomBuild, library=lib, bloom_k=k, bloom_size='5G')
 
 # ----------------------------------------------------------------------------------------------------- #
 
