@@ -253,9 +253,9 @@ class AbyssSealerReduced(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 2500
-        self.n_cpu = 5
-        self.partition = "tgac-medium"
+        self.mem = 6000
+        self.n_cpu = 2
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K), 'K' + str(self.K) + "_scaffold.fa"))
@@ -485,6 +485,6 @@ if __name__ == '__main__':
         lmp_libs = [line.rstrip() for line in lmp_libs_file if line[0] != '#']
 
     luigi.run(['Wrapper',
-               '--sealer-klist', json.dumps([30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 128]),
+               '--sealer-klist', json.dumps([200, 190, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80, 60, 40]),
                '--pe-libs', json.dumps(pe_libs),
                '--lmp-libs', json.dumps(lmp_libs)] + sys.argv[3:])
