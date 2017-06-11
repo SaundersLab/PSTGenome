@@ -10,7 +10,7 @@ from luigi import LocalTarget
 from luigi.file import TemporaryFile
 
 
-from fieldpathogenomics.luigi.slurm import SlurmExecutableTask
+from fieldpathogenomics.luigi.slurm import SlurmExecutableTask, SlurmTask
 from fieldpathogenomics.utils import CheckTargetNonEmpty
 import fieldpathogenomics.utils as utils
 
@@ -279,6 +279,41 @@ class AbyssSealerReduced(CheckTargetNonEmpty, SlurmExecutableTask):
 
 
 @requires(AbyssSealerReduced)
+class ScaffoldToContigs(CheckTargetNonEmpty, SlurmTask):
+    '''Gap filling improves contiguity so split the gap filled scaffolds into longer contigs'''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 1000
+        self.n_cpu = 1
+        self.partition = "nbi-short"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K), 'K' + str(self.K) + "_contigs.fa"))
+
+    def work(self):
+        import Bio.SeqIO
+        import re
+
+        N_min = 5  # Split on runs of N's greater than 5
+        r = re.compile('N{' + str(N_min) + ',}')
+
+        with self.input().open('r') as fin, self.output().open('w') as fout:
+            scaffolds = Bio.SeqIO.parse(fin, 'fasta')
+
+            contig_n = 0
+            for scaf in scaffolds:
+                for cont in r.split(scaf.seq):
+                    Bio.SeqIO.write(Bio.SeqRecord.SeqRecord(id='contig_{0} {1}'.format(contig_n, scaf.id), seq=cont),
+                                    fout, 'fasta')
+
+
+@requires(ScaffoldToContigs)
+class RedundansContigsGFStats(Assemble.AbyssFac):
+    pass
+
+
+@requires(AbyssSealerReduced)
 class BWAIndexScaffolds(Assemble.BWAIndex):
     pass
 # ------------------ Linked Reads  -------------------------- #
@@ -433,6 +468,7 @@ class Wrapper(luigi.WrapperTask):
             yield self.clone(AbyssSealerReduced, K=k, sealer_klist=self.sealer_klist)
 
 # ----------------------------------------------------------------------------------------------------- #
+
 
 if __name__ == '__main__':
     os.environ['TMPDIR'] = "/tgac/scratch/buntingd"
