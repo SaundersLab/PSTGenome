@@ -46,7 +46,7 @@ class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 8000
         self.n_cpu = 1
-        self.partition = "tgac-short"
+        self.partition = "nbi-short"
 
     def output(self):
         return LocalTarget(self.input().path + '.bwt')
@@ -121,7 +121,7 @@ class FetchFastqGZ(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 1000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return [LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, "raw_R1.fastq.gz")),
@@ -150,7 +150,7 @@ class RawFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
             # Set the SLURM request params for this task
             self.mem = 3000
             self.n_cpu = 1
-            self.partition = "tgac-medium"
+            self.partition = "nbi-medium"
 
         def output(self):
             return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'raw', 'R1', 'fastqc_data.txt')),
@@ -192,7 +192,7 @@ class Trimmomatic(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 2000
         self.n_cpu = 4
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return [LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, "filtered_R1.fastq.gz")),
@@ -235,7 +235,7 @@ class TrimmedFastQC(CheckTargetNonEmpty, SlurmExecutableTask):
             # Set the SLURM request params for this task
             self.mem = 3000
             self.n_cpu = 1
-            self.partition = "tgac-medium"
+            self.partition = "nbi-medium"
 
         def output(self):
             return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, 'trimmed', 'R1', 'fastqc_data.txt')),
@@ -276,7 +276,7 @@ class UnzipFastqGZ(CheckTargetNonEmpty, SlurmExecutableTask):
             # Set the SLURM request params for this task
             self.mem = 3000
             self.n_cpu = 1
-            self.partition = "tgac-medium"
+            self.partition = "nbi-medium"
 
         def output(self):
             return [LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, self.library + "_R1.fastq")),
@@ -307,7 +307,7 @@ class LMP_process(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 1000
         self.n_cpu = len(self.lmp_libs)
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
         self.cwd = os.path.join(self.scratch_dir, PIPELINE, VERSION)
 
@@ -352,7 +352,7 @@ class CompressLMP(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 4000
         self.n_cpu = 1
-        self.partition = "tgac-short"
+        self.partition = "nbi-short"
 
     def input(self):
         return self.requires().output()[self.library]
@@ -394,7 +394,7 @@ class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 2000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.fastq.gz')
@@ -564,7 +564,7 @@ class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 4000
         self.n_cpu = 4
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def requires(self):
         return {'contigs': self.clone(BWAIndexContigs, K=200),
@@ -596,7 +596,7 @@ class SortLMP(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 8000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, self.library + ".bam"))
@@ -621,7 +621,7 @@ class CollectISMetrics(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 1000
         self.n_cpu = 1
-        self.partition = "tgac-short"
+        self.partition = "nbi-short"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, "insert_size"))
@@ -658,7 +658,7 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 4000
         self.n_cpu = 4
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist"))]
@@ -684,7 +684,7 @@ class KatCompIntra(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 6
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".intra-main.mx"))
@@ -712,7 +712,7 @@ class KatCompInter(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 6
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def requires(self):
         return [self.clone(CleanedReads, library=self.libA),
@@ -746,7 +746,7 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 6
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def requires(self):
         return {'pe': [self.clone(CleanedReads, library=lib) for lib in self.pe_libs],
@@ -796,7 +796,7 @@ class Redundans(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 4000
         self.n_cpu = 4
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'redundans', str(self.K), "homozygous.fa")),
@@ -848,7 +848,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 28000
         self.n_cpu = 1
-        self.partition = "tgac-short"
+        self.partition = "nbi-short"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
@@ -905,7 +905,7 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 2000
         self.n_cpu = 20
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
@@ -938,7 +938,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 500
         self.n_cpu = 4
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.scafSeq'))
@@ -970,7 +970,7 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
         self.rm_tmp = False
 
     def output(self):
@@ -1006,7 +1006,7 @@ class AbyssBloomBuild(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 750
         self.n_cpu = 20
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "bloomfilters", str(self.bloom_k) + ".bloom"))
@@ -1122,7 +1122,7 @@ class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 2000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.fastq.gz')
@@ -1151,7 +1151,7 @@ class MapLinkedReadsScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 500
         self.n_cpu = 24
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def requires(self):
         return {'contigs': self.clone(BWAIndexScaffolds),
@@ -1189,7 +1189,7 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 8000
         self.n_cpu = 1
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def requires(self):
         return {'contigs': self.clone(SOAPNremap),
@@ -1260,7 +1260,7 @@ class MapContigsMegabubbles(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 200
         self.n_cpu = 4
-        self.partition = "tgac-medium"
+        self.partition = "nbi-medium"
 
     def requires(self):
         return {'contigs': self.clone(BWAIndexMegabubbles),
