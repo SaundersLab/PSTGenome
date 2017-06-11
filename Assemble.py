@@ -65,6 +65,7 @@ class AbyssFac(sqla.CopyToTable):
     columns = [
         (["Task", sqlalchemy.String(20)], {}),
         (["K", sqlalchemy.INTEGER], {}),
+        (["soap_k", sqlalchemy.INTEGER], {}),
         (["n", sqlalchemy.FLOAT], {}),
         (["n:500", sqlalchemy.FLOAT], {}),
         (["L50", sqlalchemy.FLOAT], {}),
@@ -93,7 +94,11 @@ class AbyssFac(sqla.CopyToTable):
 
     def rows(self):
         abyss = self.get_abyss()
-        self._rows = [[self.get_task_family()[:20]] + [self.K] + abyss]
+        try:
+            soap_k = self.soap_k
+        except AttributeError:
+            soap_k = -1
+        self._rows = [[self.get_task_family()[:20]] + [self.K, soap_k] + abyss]
         return self._rows
 
 # ------------------ Shared QC -------------------------- #
@@ -806,7 +811,7 @@ class Redundans(CheckTargetNonEmpty, SlurmExecutableTask):
                     redundans -f {contigs} \
                               -o {temp_dir} \
                               --identity 0.65 \
-                              --overlap 0.95  \
+                              --overlap 0.85  \
                               --minLength 300 \
                               --noscaffolding --nogapclosing  -v -t{n_cpu}
 
@@ -836,6 +841,7 @@ class BWAIndexContigs(BWAIndex):
 class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
 
     prefix = luigi.Parameter(default='PST')
+    soap_k = luigi.IntParameter(default=71)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -845,7 +851,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-short"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -853,11 +859,12 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
                     cd {cwd}
                     export soap='/usr/users/ga004/buntingd/w2rap/deps/soap_scaffolder'
 
-                    $soap/s_prepare -g {prefix} -K 71 -c {contigs}
+                    $soap/s_prepare -g {prefix} -K {k} -c {contigs}
 
         '''.format(contigs=self.input().path,
                    cwd=os.path.dirname(self.output().path),
-                   prefix=self.prefix + str(self.K))
+                   prefix=self.prefix + str(self.K),
+                   k=self.soap_k)
 
 
 @inherits(LMP_process)
@@ -893,8 +900,6 @@ class SOAPConfig(CheckTargetNonEmpty, luigi.Task):
 @inherits(SOAPConfig)
 class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
 
-    soap_k = luigi.IntParameter(default=31)
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
@@ -903,7 +908,7 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
 
     def requires(self):
         return {'config': self.clone(SOAPConfig),
@@ -936,7 +941,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scafSeq'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.scafSeq'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -969,7 +974,7 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
         self.rm_tmp = False
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), self.prefix + str(self.K) + '.scaf.fasta'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.scaf.fasta'))
 
     def work_script(self):
         soap_base = self.input().path[:-8]
@@ -1039,7 +1044,7 @@ class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "nbi-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K), 'K' + str(self.K) + "_scaffold.fa"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", 'SOAP' + str(self.soap_k), 'K' + str(self.K), 'K' + str(self.K) + "_scaffold.fa"))
 
     def requires(self):
         return {'bloomfilters': [self.clone(AbyssBloomBuild, bloom_k=k) for k in self.sealer_klist],
@@ -1073,7 +1078,7 @@ class ScaffoldToContigs(CheckTargetNonEmpty, SlurmTask):
         self.partition = "nbi-short"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", "SOAP", 'K' + str(self.K), 'K' + str(self.K) + "_contigs.fa"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", 'SOAP' + str(self.soap_k), 'K' + str(self.K), 'K' + str(self.K) + "_contigs.fa"))
 
     def work(self):
         import Bio.SeqIO
@@ -1093,7 +1098,7 @@ class ScaffoldToContigs(CheckTargetNonEmpty, SlurmTask):
 
 
 @requires(ScaffoldToContigs)
-class RedundansContigsGFStats(AbyssFac):
+class ContigsGFStats(AbyssFac):
     pass
 
 
@@ -1153,7 +1158,7 @@ class MapLinkedReadsScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
                 'reads': self.clone(BAMtoFASTQ)}
 
     def output(self):
-        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", 'scaffolds', "K" + str(self.K), "barcoded_aligned.bam"))
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", 'SOAP' + str(self.soap_k), "K" + str(self.K), "barcoded_aligned.bam"))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -1191,7 +1196,7 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
                 'reads': self.clone(MapLinkedReadsScaffolds)}
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', 'scaffolds', "K" + str(self.K), "K" + str(self.K) + ".scaffolds.fa"))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', 'SOAP' + str(self.soap_k), "K" + str(self.K), "K" + str(self.K) + ".scaffolds.fa"))
 
     def work_script(self):
         self.temp = TemporaryFile()
@@ -1363,6 +1368,7 @@ class Wrapper(luigi.WrapperTask):
     bloom_k = None
     bloom_size = None
     K_list = luigi.ListParameter(default=[200])
+    soap_klist = luigi.ListParameter()
 
     def requires(self):
         yield self.clone(LMPBatchWrapper)
@@ -1374,10 +1380,11 @@ class Wrapper(luigi.WrapperTask):
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
-            yield self.clone(ScaffoldStats, K=k)
-            yield self.clone(SOAPNremap, K=k)
-            yield self.clone(ARCSStats, K=k)
-            yield self.clone(AbyssSealer, K=k)
+
+            for soap_k in self.soap_klist:
+                yield self.clone(ScaffoldStats, K=k, soap_k=soap_k)
+                yield self.clone(ARCSStats, K=k, soap_k=soap_k)
+                yield self.clone(AbyssSealer, K=k, soap_k=soap_k)
 
             #for lib in self.pe_libs:
             #    yield self.clone(KatCompContigs, K=k, library=lib)
@@ -1398,5 +1405,6 @@ if __name__ == '__main__':
 
     luigi.run(['Wrapper',
                '--sealer-klist', json.dumps([200, 190, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80, 60, 40]),
+               '--soap-klist', json.dumps([21, 31, 51, 71, 91, 101, 127]),
                '--pe-libs', json.dumps(pe_libs),
                '--lmp-libs', json.dumps(lmp_libs)] + sys.argv[3:])
