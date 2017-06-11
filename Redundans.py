@@ -146,11 +146,13 @@ class SOAPConfig(CheckTargetNonEmpty, luigi.Task):
 @inherits(SOAPConfig)
 class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
 
+    soap_k = luigi.IntParameter(default=31)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
         self.mem = 2000
-        self.n_cpu = 12
+        self.n_cpu = 20
         self.partition = "tgac-medium"
 
     def output(self):
@@ -167,11 +169,12 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
                     cd {cwd}
                     export soap='/usr/users/ga004/buntingd/w2rap/deps/soap_scaffolder'
 
-                    $soap/s_map -k 31 -s {config} -p {n_cpu} -g {prefix}
+                    $soap/s_map -k {k} -s {config} -p {n_cpu} -g {prefix}
 
         '''.format(config=self.input()['config'].path,
                    cwd=os.path.split(self.output().path)[0],
                    n_cpu=self.n_cpu,
+                   k=self.soap_k,
                    prefix=self.prefix + str(self.K))
 
 
@@ -182,7 +185,7 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
         self.mem = 500
-        self.n_cpu = 12
+        self.n_cpu = 4
         self.partition = "tgac-medium"
 
     def output(self):
