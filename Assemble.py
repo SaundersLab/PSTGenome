@@ -1039,8 +1039,8 @@ class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 6000
-        self.n_cpu = 2
+        self.mem = 3000
+        self.n_cpu = 4
         self.partition = "nbi-medium"
 
     def output(self):
@@ -1056,7 +1056,15 @@ class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
                     mkdir -p {output}/temp
                     set -euo pipefail
 
-                    abyss-sealer {k_args} -P25 --flank-length=150 -j {n_cpu} -o {output}/temp/{prefix} -S {scaffolds} {bloomfilters}
+                    abyss-sealer {k_args} \
+                                 --max-paths=25 \
+                                 --flank-length=150 \
+                                 --max-gap-length=6000 \
+                                 --max-branches=10000  \
+                                 --verbose \
+                                 -j {n_cpu} \
+                                 -o {output}/temp/{prefix} \
+                                 -S {scaffolds} {bloomfilters}
 
                     mv {output}/temp/{prefix}* {output}/
         '''.format(k_args=' '.join(['-k' + str(k) for k in self.sealer_klist]),
