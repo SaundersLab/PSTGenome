@@ -15,19 +15,18 @@ from luigi.file import TemporaryFile
 
 
 from fieldpathogenomics.luigi.slurm import SlurmExecutableTask, SlurmTask
-from fieldpathogenomics.luigi.uv import UVExecutableTask
 from fieldpathogenomics.utils import CheckTargetNonEmpty
 import fieldpathogenomics.utils as utils
 
 PIPELINE = os.path.basename(__file__).split('.')[0]
-VERSION = '0.1'
+VERSION = '0.2'
 luigi.auto_namespace(scope=PIPELINE)
 
 
 # This information has to be filled in based on the output of
 # CollectISMetrics, obviously hardcoding it here is not good!!!
 
-INSERT_SIZES = {'LIB17363': 400, 'LIB26234': 800,
+INSERT_SIZES = {'LIB17363': 0, 'LIB26234': 800,
                 'LIB19826': 0, 'LIB19827': 0,
                 'LIB19828': 0, 'LIB19829': 0,
                 'LIB19830': 0, 'LIB19831': 0,
@@ -276,7 +275,7 @@ class UnzipFastqGZ(CheckTargetNonEmpty, SlurmExecutableTask):
             # Set the SLURM request params for this task
             self.mem = 3000
             self.n_cpu = 1
-            self.partition = "nbi-medium"
+            self.partition = "nbi-short"
 
         def output(self):
             return [LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, self.library, self.library + "_R1.fastq")),
@@ -307,7 +306,7 @@ class LMP_process(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 1000
         self.n_cpu = len(self.lmp_libs)
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,RG-Diane-Saunders"
 
         self.cwd = os.path.join(self.scratch_dir, PIPELINE, VERSION)
 
@@ -394,7 +393,7 @@ class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 2000
         self.n_cpu = 1
-        self.partition = "nbi-medium"
+        self.partition = "nbi-short"
 
     def output(self):
         return LocalTarget('/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/longranger/pst_reads/outs/barcoded_unaligned.fastq.gz')
@@ -445,16 +444,16 @@ class CleanedReads(luigi.WrapperTask):
 
 
 @inherits(Trimmomatic)
-class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
+class W2RapContigger(CheckTargetNonEmpty, SlurmExecutableTask):
     library = None
     K = luigi.IntParameter()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 300000 if self.K >= 200 else 550000
-        self.n_cpu = 24
-        self.host = "uv2"
+        self.n_cpu = 10
+        self.mem = int(100000 / self.n_cpu)
+        self.partition = "RG-Diane-Saunders"
 
     def requires(self):
         return [self.clone(Trimmomatic, library=lib.rstrip()) for lib in self.pe_libs]
@@ -463,16 +462,15 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K), "a.lines.fasta"))
 
     def work_script(self):
-        output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
-                                            "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
         return '''#!/bin/bash
                     source gcc-5.2.0;
                     mkdir -p {temp_dir}
                     mkdir -p {output_dir}_temp
                     set -euo pipefail
 
-                    export OMP_PROC_BIND=spread
-                    export MALLOC_PER_THREAD=1
+                    echo `hostname`
+                    echo $PATH
+
                     export w2rap='/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/User_Workareas/buntingd/assembly/w2rap-contigger'
 
                     $w2rap  --tmp_dir {temp_dir} \
@@ -482,6 +480,7 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
                              -K {K} \
                              -o {output_dir}_temp \
                              -p pst \
+                             --dump_all 1 \
                              --read_files {reads}
 
                   mv -T {output_dir}_temp {output_dir}
@@ -489,21 +488,20 @@ class W2RapContigger(CheckTargetNonEmpty, UVExecutableTask):
         '''.format(temp_dir=os.path.join(self.scratch_dir, 'pe_assembly', str(self.K)),
                    n_cpu=self.n_cpu,
                    K=self.K,
-                   mem=int(0.85 * self.mem / 1000),
-                   output_dir=os.path.split(output)[0],
+                   mem=int(0.85 * self.mem * self.n_cpu / 1000),
+                   output_dir=os.path.dirname(self.output().path),
                    reads=','.join([x[0].path + ',' + x[1].path for x in self.input()]))
 
 
 @inherits(CleanedReads)
-class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
+class Dipspades(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 350000
-        self.n_cpu = 24
-        self.host = "uv2"
-        self.rm_tmp = False
+        self.mem = 10000
+        self.n_cpu = 10
+        self.partition = "RG-Diane-Saunders"
 
     def requires(self):
         # Filter out the LMP libraries with poor insert sizes
@@ -514,9 +512,6 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'dipspades'))
 
     def work_script(self):
-        output = self.output().path.replace("/nbi/Research-Groups/JIC/Diane-Saunders/",
-                                            "/nbi/group-data/ifs/JIC/Research-Groups/Diane-Saunders/")
-
         pe = ' '.join(["--pe{i}-1 {R1} --pe{i}-2 {R2}".format(i=i + 1, R1=x[0].path, R2=x[1].path)
                       for i, x in enumerate(self.input()['pe'])])
         lmp = ' '.join(["--mp{i}-1 {R1} --mp{i}-2 {R2}".format(i=i + 1, R1=x[0].path, R2=x[1].path)
@@ -536,8 +531,8 @@ class Dipspades(CheckTargetNonEmpty, UVExecutableTask):
 
                   mv -T {output_dir}_temp {output_dir}
         '''.format(n_cpu=self.n_cpu,
-                   mem=int(0.8 * self.mem / 1000),
-                   output_dir=output,
+                   mem=int(0.9 * self.mem * self.n_cpu / 1000),
+                   output_dir=self.output().path,
                    pe=pe,
                    lmp=lmp)
 
@@ -658,7 +653,7 @@ class KatHist(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 4000
         self.n_cpu = 4
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,tgac-medium,RG-Diane-Saunders"
 
     def output(self):
         return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".hist"))]
@@ -684,7 +679,7 @@ class KatCompIntra(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 6
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,tgac-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, self.library, self.library + ".intra-main.mx"))
@@ -712,7 +707,7 @@ class KatCompInter(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 6
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,tgac-medium"
 
     def requires(self):
         return [self.clone(CleanedReads, library=self.libA),
@@ -746,16 +741,19 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 6000
         self.n_cpu = 6
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,tgac-medium"
 
     def requires(self):
-        return {'pe': [self.clone(CleanedReads, library=lib) for lib in self.pe_libs],
+        return {'reads': self.clone(CleanedReads, library=self.library),
                 'contigs': self.clone(W2RapContigger)}
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'K' + str(self.K), self.library + "-main.mx"))
 
     def work_script(self):
+        reads = (self.input()['reads'][0].path + ' ' + self.input()['reads'][1].path
+                 if isinstance(self.input()['reads'], list)
+                 else self.input()['reads'].path)
         return '''#!/bin/bash
                     source kat-2.3.2
                     set -euo pipefail
@@ -764,7 +762,7 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
         '''.format(output_prefix=self.output().path[:-8],
                    n_cpu=self.n_cpu,
-                   reads=' '.join([x[0].path + ' ' + x[1].path for x in self.input()['pe']]),
+                   reads=reads,
                    contigs=self.input()['contigs'].path)
 
 
@@ -783,7 +781,7 @@ class KATBatchWrapper(luigi.WrapperTask):
         hists = [self.clone(KatHist, library=lib) for lib in libs]
         intras = [self.clone(KatCompIntra, library=lib) for lib in libs]
         inters = [self.clone(KatCompInter, libA=a, libB=b) for a, b in itertools.combinations(libs, 2)]
-        return hists + intras + inters
+        return hists #+ intras + inters
 
 # ------------------ Homozygous filter -------------------------- #
 
@@ -796,7 +794,7 @@ class Redundans(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 4000
         self.n_cpu = 4
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,RG-Diane-Saunders"
 
     def output(self):
         return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'contigs', 'redundans', str(self.K), "homozygous.fa")),
@@ -851,7 +849,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "nbi-short"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.contig'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), 'k' + str(self.soap_k), self.prefix + '.contig'))
 
     def work_script(self):
         return '''#!/bin/bash
@@ -863,7 +861,7 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
 
         '''.format(contigs=self.input().path,
                    cwd=os.path.dirname(self.output().path),
-                   prefix=self.prefix + str(self.K),
+                   prefix=self.output().path[:-7],
                    k=self.soap_k)
 
 
@@ -903,12 +901,12 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 2000
-        self.n_cpu = 20
-        self.partition = "nbi-medium"
+        self.mem = 4000
+        self.n_cpu = 5
+        self.partition = "nbi-medium,RG-Diane-Saunders,tgac-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.readOnContig.gz'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), 'k' + str(self.soap_k), self.prefix + '.readOnContig.gz'))
 
     def requires(self):
         return {'config': self.clone(SOAPConfig),
@@ -921,13 +919,13 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
                     cd {cwd}
                     export soap='/usr/users/ga004/buntingd/w2rap/deps/soap_scaffolder'
 
-                    $soap/s_map -k {k} -s {config} -p {n_cpu} -g {prefix}
+                    $soap/s_map -k {k} -s {config} -p {n_cpu} -g {contigs}
 
         '''.format(config=self.input()['config'].path,
-                   cwd=os.path.split(self.output().path)[0],
+                   cwd=os.path.dirname(self.output().path),
                    n_cpu=self.n_cpu,
                    k=self.soap_k,
-                   prefix=self.prefix + str(self.K))
+                   contigs=self.input()['contigs'].path[:-7])
 
 
 @requires(SOAPMap)
@@ -936,12 +934,13 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set the SLURM request params for this task
-        self.mem = 500
+        self.mem = 2000
         self.n_cpu = 4
-        self.partition = "nbi-medium"
+        self.partition = "nbi-medium,RG-Diane-Saunders"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.scafSeq'))
+        return [LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), 'k' + str(self.soap_k), self.prefix + '.scafSeq')),
+                LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), 'k' + str(self.soap_k), self.prefix + '.scaf'))]
 
     def work_script(self):
         return '''#!/bin/bash
@@ -952,14 +951,9 @@ class SOAPScaff(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     $soap/s_scaff -p {n_cpu} -g {prefix}
 
-        '''.format(cwd=os.path.split(self.output().path)[0],
+        '''.format(cwd=os.path.dirname(self.output()[0].path),
                    n_cpu=self.n_cpu,
-                   prefix=self.prefix + str(self.K))
-
-
-@requires(SOAPScaff)
-class ScaffoldStats(AbyssFac):
-    pass
+                   prefix=self.input().path[:-16])
 
 
 @requires(SOAPScaff)
@@ -977,7 +971,7 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP' + str(self.soap_k), 'K' + str(self.K), self.prefix + str(self.K) + '.scaf.fasta'))
 
     def work_script(self):
-        soap_base = self.input().path[:-8]
+        soap_base = self.input()[0].path[:-8]
 
         return '''#!/bin/bash
                     source python-2.7.11
@@ -993,6 +987,10 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
                    contigs_file=soap_base + '.contig',
                    output=self.output().path)
 
+
+@requires(SOAPNremap)
+class ScaffoldStats(AbyssFac):
+    pass
 # ------------------ Gap Filling -------------------------- #
 
 
@@ -1041,7 +1039,7 @@ class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
         # Set the SLURM request params for this task
         self.mem = 3000
         self.n_cpu = 4
-        self.partition = "nbi-medium"
+        self.partition = "nbi-long"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, "sealer", 'SOAP' + str(self.soap_k), 'K' + str(self.K), 'K' + str(self.K) + "_scaffold.fa"))
@@ -1058,10 +1056,10 @@ class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
 
                     abyss-sealer {k_args} \
                                  --max-paths=25 \
-                                 --flank-length=150 \
                                  --max-gap-length=6000 \
                                  --max-branches=10000  \
                                  --verbose \
+                                 --flank-length=220 \
                                  -j {n_cpu} \
                                  -o {output}/temp/{prefix} \
                                  -S {scaffolds} {bloomfilters}
@@ -1251,7 +1249,41 @@ class ARCSStats(AbyssFac):
 
 class SupernovaMegabubbles(luigi.ExternalTask):
     def output(self):
-        return LocalTarget("/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/supernova/pst88/fasta/megabubbles.fasta.gz")
+        return LocalTarget("/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/supernova/1.2.0/pst88/fasta/megabubbles.fasta")
+
+
+@inherits(SupernovaMegabubbles)
+@inherits(CleanedReads)
+class KatCompSupernova(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 6000
+        self.n_cpu = 6
+        self.partition = "nbi-medium,tgac-medium"
+
+    def requires(self):
+        return {'reads': self.clone(CleanedReads, library=self.library),
+                'contigs': self.clone(SupernovaMegabubbles)}
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'supernova', 'KAT', self.library + "-main.mx"))
+
+    def work_script(self):
+        reads = (self.input()['reads'][0].path + ' ' + self.input()['reads'][1].path
+                 if isinstance(self.input()['reads'], list)
+                 else self.input()['reads'].path)
+        return '''#!/bin/bash
+                    source kat-2.3.2
+                    set -euo pipefail
+
+                    kat comp -o {output_prefix} -t {n_cpu} <(zcat {reads}) ({contigs})
+
+        '''.format(output_prefix=self.output().path[:-8],
+                   n_cpu=self.n_cpu,
+                   reads=reads,
+                   contigs=self.input()['contigs'].path)
 
 
 @requires(SupernovaMegabubbles)
@@ -1381,21 +1413,25 @@ class Wrapper(luigi.WrapperTask):
     def requires(self):
         yield self.clone(LMPBatchWrapper)
         yield self.clone(PEBatchWrapper)
-        #yield self.clone(KATBatchWrapper)
+        yield self.clone(KATBatchWrapper)
         yield self.clone(MapContigsMegabubbles, K=280)
 
-        #yield self.clone(Dipspades)
+        yield self.clone(Dipspades)
+
+        #for lib in list(self.pe_libs):
+        #    yield self.clone(KatCompSupernova, library=lib)
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
 
             for soap_k in self.soap_klist:
+                pass
                 yield self.clone(ScaffoldStats, K=k, soap_k=soap_k)
                 yield self.clone(ARCSStats, K=k, soap_k=soap_k)
                 yield self.clone(AbyssSealer, K=k, soap_k=soap_k)
 
-            #for lib in self.pe_libs:
-            #    yield self.clone(KatCompContigs, K=k, library=lib)
+            for lib in list(self.pe_libs):
+                yield self.clone(KatCompContigs, K=k, library=lib)
 
 # ----------------------------------------------------------------------------------------------------- #
 
@@ -1412,7 +1448,7 @@ if __name__ == '__main__':
         lmp_libs = [line.rstrip() for line in lmp_libs_file if line[0] != '#']
 
     luigi.run(['Wrapper',
-               '--sealer-klist', json.dumps([200, 190, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80, 60, 40]),
-               '--soap-klist', json.dumps([21, 31, 51, 71, 91, 101, 127]),
+               '--sealer-klist', json.dumps([200, 180, 160, 140, 120, 100, 80, 40]),
+               '--soap-klist', json.dumps([21, 31, 51, 71, 91, ]),
                '--pe-libs', json.dumps(pe_libs),
                '--lmp-libs', json.dumps(lmp_libs)] + sys.argv[3:])
