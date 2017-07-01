@@ -13,9 +13,9 @@ from luigi.util import requires, inherits
 from luigi import LocalTarget
 from luigi.file import TemporaryFile
 
-
-from fieldpathogenomics.luigi.slurm import SlurmExecutableTask, SlurmTask
-from fieldpathogenomics.utils import CheckTargetNonEmpty
+import bioluigi
+from bioluigi.slurm import SlurmExecutableTask, SlurmTask
+from bioluigi.utils import CheckTargetNonEmpty
 import fieldpathogenomics.utils as utils
 
 PIPELINE = os.path.basename(__file__).split('.')[0]
@@ -36,29 +36,6 @@ INSERT_SIZES = {'LIB17363': 0, 'LIB26234': 800,
 
 
 # ------------------ Util Tasks -------------------------- #
-
-
-class BWAIndex(CheckTargetNonEmpty, SlurmExecutableTask):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set the SLURM request params for this task
-        self.mem = 8000
-        self.n_cpu = 1
-        self.partition = "nbi-short"
-
-    def output(self):
-        return LocalTarget(self.input().path + '.bwt')
-
-    def work_script(self):
-        return '''#!/bin/bash
-                    source bwa-0.7.13
-                    set -euo pipefail
-
-                    bwa index {fasta}
-
-        '''.format(fasta=self.input().path)
-
 
 class AbyssFac(sqla.CopyToTable):
     columns = [
@@ -543,7 +520,7 @@ class ContigStats(AbyssFac):
 
 
 @requires(W2RapContigger)
-class BWAIndexContigs(BWAIndex):
+class BWAIndexContigs(bioluigi.BWAIndex):
     pass
 
 
@@ -829,7 +806,7 @@ class HomozygousContigs(luigi.WrapperTask):
 
 
 @requires(HomozygousContigs)
-class BWAIndexContigs(BWAIndex):
+class BWAIndexContigs(bioluigi.BWAIndex):
     pass
 
 # ------------------ Scaffolding -------------------------- #
@@ -991,6 +968,12 @@ class SOAPNremap(CheckTargetNonEmpty, SlurmExecutableTask):
 @requires(SOAPNremap)
 class ScaffoldStats(AbyssFac):
     pass
+
+
+@requires(SOAPNremap)
+class BWAIndexScaffolds(bioluigi.BWAIndex):
+    pass
+
 # ------------------ Gap Filling -------------------------- #
 
 
@@ -1109,7 +1092,7 @@ class ContigsGFStats(AbyssFac):
 
 
 @requires(AbyssSealer)
-class BWAIndexScaffolds(BWAIndex):
+class BWAIndexGFScaffolds(bioluigi.BWAIndex):
     pass
 # ------------------ Linked Reads  -------------------------- #
 
@@ -1148,8 +1131,7 @@ class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
                    output=self.output().path)
 
 
-@inherits(BWAIndexScaffolds)
-@inherits(BAMtoFASTQ)
+@requires(reads=BAMtoFASTQ, contigs=BWAIndexScaffolds)
 class MapLinkedReadsScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -1158,10 +1140,6 @@ class MapLinkedReadsScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
         self.mem = 500
         self.n_cpu = 24
         self.partition = "nbi-medium"
-
-    def requires(self):
-        return {'contigs': self.clone(BWAIndexScaffolds),
-                'reads': self.clone(BAMtoFASTQ)}
 
     def output(self):
         return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "linked_reads", 'SOAP' + str(self.soap_k), "K" + str(self.K), "barcoded_aligned.bam"))
@@ -1186,9 +1164,87 @@ class MapLinkedReadsScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
                    cwd=os.path.dirname(self.output().path))
 
 
-@inherits(MapLinkedReadsScaffolds)
-@inherits(SOAPNremap)
-class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
+@requires(reads=BAMtoFASTQ, contigs=BWAIndexGFScaffolds)
+class MapLinkedReadsGFScaffolds(MapLinkedReadsScaffolds):
+    def output(self):
+        return LocalTarget(os.path.join(self.scratch_dir, PIPELINE, VERSION, "sealer", "linked_reads", 'SOAP' + str(self.soap_k), "K" + str(self.K), "barcoded_aligned.bam"))
+
+
+# ------------------ Architect Scaffolding  -------------------------- #
+
+@requires(MapLinkedReadsScaffolds)
+class BamToContainment(CheckTargetNonEmpty, SlurmTask):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "nbi-short"
+
+        self.threshold = 10  # The minimum number of reads per barcode
+
+    def output(self):
+        return LocalTarget(self.input().path[:-4] + ".containment")
+
+    def work(self):
+        import pysam
+
+        contig_interval_map = {}
+        contig_well_suport_counts = {}
+        barcodes_to_well = {}
+        n = 0
+
+        samfile = pysam.Samfile(self.input().path, "rb")
+
+        for read in samfile:
+            if (not read.positions) or read.mapping_quality < 30:
+                continue
+            bc = read.qname.split('_')[1]
+
+            # Number the barcodes and use this as the well id
+            if bc not in barcodes_to_well:
+                barcodes_to_well[bc] = len(barcodes_to_well.keys())
+            well = barcodes_to_well[bc]
+
+            contig = samfile.getrname(read.tid)
+            start, end = min(read.positions), max(read.positions)
+
+            if contig not in contig_interval_map:
+                contig_interval_map[contig] = dict()
+                contig_well_suport_counts[contig] = dict()
+            if well not in contig_interval_map[contig]:
+                contig_interval_map[contig][well] = [[start], [end]]
+                contig_well_suport_counts[contig][well] = 0
+
+            start_positions, end_positions = contig_interval_map[contig][well]
+
+            if start < start_positions[-1]:
+                start_positions.append(start)
+                start_positions.sort()
+                start_positions = start_positions[:10]
+            if end > end_positions[0]:
+                end_positions.append(end)
+                end_positions.sort()
+                end_positions = end_positions[1:]
+
+            contig_interval_map[contig][well] = start_positions, end_positions
+            contig_well_suport_counts[contig][well] += 1
+
+            n += 1
+            if n % 1000000 == 0:
+                print('reads processed: {0}'.format(n))
+
+        # write containment
+        with self.output().open('w') as c:
+            for contig, interval_map in contig_interval_map.items():
+                for well, interval in interval_map.items():
+                    if contig_well_suport_counts[contig][well] > self.threshold:
+                        start, end = interval[0][-1], interval[1][0]
+                        c.write('W\t%s\t%d\t%d\t%d\n' % (contig, well, start, end))
+
+
+@requires(fasta=SOAPNremap, containment=BamToContainment)
+class ArchitectScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1197,9 +1253,38 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
         self.n_cpu = 1
         self.partition = "nbi-medium"
 
-    def requires(self):
-        return {'contigs': self.clone(SOAPNremap),
-                'reads': self.clone(MapLinkedReadsScaffolds)}
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'architect', 'SOAP' + str(self.soap_k), "K" + str(self.K), 'architect'))
+
+    def work_script(self):
+
+        return '''#!/bin/bash
+               source /usr/users/ga004/buntingd/FP_dev/misc/python2.7/bin/activate
+               set -euo pipefail
+
+                python /usr/users/ga004/buntingd/architect/architect.py scaffold \
+                --fasta {fasta} \
+                --containment {containment} \
+                --out {output} \
+                #--edges EDGES]
+
+
+                '''.format(fasta=self.input()['fasta'].path,
+                           containment=self.input()['containment'].path,
+                           output=self.output().path)
+
+# ------------------ ARCS Scaffolding  -------------------------- #
+
+
+@requires(contigs=SOAPNremap, reads=MapLinkedReadsScaffolds)
+class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "nbi-medium"
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'linked_reads', 'SOAP' + str(self.soap_k), "K" + str(self.K), "K" + str(self.K) + ".scaffolds.fa"))
@@ -1244,6 +1329,25 @@ class ArcsLinksScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
 @requires(ArcsLinksScaffolds)
 class ARCSStats(AbyssFac):
     pass
+
+
+@requires(contigs=AbyssSealer, reads=MapLinkedReadsGFScaffolds)
+class ArcsLinksGFScaffolds(ArcsLinksScaffolds):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set the SLURM request params for this task
+        self.mem = 8000
+        self.n_cpu = 1
+        self.partition = "nbi-medium"
+
+    def output(self):
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'sealer', 'linked_reads', 'SOAP' + str(self.soap_k), "K" + str(self.K), "K" + str(self.K) + ".scaffolds.fa"))
+
+
+@requires(ArcsLinksGFScaffolds)
+class ARCSGFStats(AbyssFac):
+    pass
 # ------------------ Supernova -------------------------- #
 
 
@@ -1287,7 +1391,7 @@ class KatCompSupernova(CheckTargetNonEmpty, SlurmExecutableTask):
 
 
 @requires(SupernovaMegabubbles)
-class BWAIndexMegabubbles(BWAIndex):
+class BWAIndexMegabubbles(bioluigi.BWAIndex):
     pass
 
 
@@ -1418,8 +1522,8 @@ class Wrapper(luigi.WrapperTask):
 
         yield self.clone(Dipspades)
 
-        #for lib in list(self.pe_libs):
-        #    yield self.clone(KatCompSupernova, library=lib)
+        for lib in list(self.pe_libs):
+            yield self.clone(KatCompSupernova, library=lib)
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
