@@ -9,11 +9,12 @@ import tempfile
 import luigi
 
 from luigi.contrib import sqla
-from luigi.util import requires, inherits
 from luigi import LocalTarget
 from luigi.file import TemporaryFile
 
 import bioluigi
+from bioluigi.decorators import requires, inherits
+from bioluigi.tasks import BWAIndex
 from bioluigi.slurm import SlurmExecutableTask, SlurmTask
 from bioluigi.utils import CheckTargetNonEmpty
 import fieldpathogenomics.utils as utils
@@ -520,7 +521,7 @@ class ContigStats(AbyssFac):
 
 
 @requires(W2RapContigger)
-class BWAIndexContigs(bioluigi.BWAIndex):
+class BWAIndexContigs(BWAIndex):
     pass
 
 
@@ -806,7 +807,7 @@ class HomozygousContigs(luigi.WrapperTask):
 
 
 @requires(HomozygousContigs)
-class BWAIndexContigs(bioluigi.BWAIndex):
+class BWAIndexContigs(BWAIndex):
     pass
 
 # ------------------ Scaffolding -------------------------- #
@@ -971,7 +972,7 @@ class ScaffoldStats(AbyssFac):
 
 
 @requires(SOAPNremap)
-class BWAIndexScaffolds(bioluigi.BWAIndex):
+class BWAIndexScaffolds(BWAIndex):
     pass
 
 # ------------------ Gap Filling -------------------------- #
@@ -1092,7 +1093,7 @@ class ContigsGFStats(AbyssFac):
 
 
 @requires(AbyssSealer)
-class BWAIndexGFScaffolds(bioluigi.BWAIndex):
+class BWAIndexGFScaffolds(BWAIndex):
     pass
 # ------------------ Linked Reads  -------------------------- #
 
@@ -1382,7 +1383,7 @@ class KatCompSupernova(CheckTargetNonEmpty, SlurmExecutableTask):
                     source kat-2.3.2
                     set -euo pipefail
 
-                    kat comp -o {output_prefix} -t {n_cpu} <(zcat {reads}) ({contigs})
+                    kat comp -o {output_prefix} -t {n_cpu} <(zcat {reads}) {contigs}
 
         '''.format(output_prefix=self.output().path[:-8],
                    n_cpu=self.n_cpu,
@@ -1391,7 +1392,7 @@ class KatCompSupernova(CheckTargetNonEmpty, SlurmExecutableTask):
 
 
 @requires(SupernovaMegabubbles)
-class BWAIndexMegabubbles(bioluigi.BWAIndex):
+class BWAIndexMegabubbles(BWAIndex):
     pass
 
 
@@ -1504,6 +1505,7 @@ class LMPBatchWrapper(luigi.WrapperTask):
 @inherits(KatCompContigs)
 @inherits(Dipspades)
 @inherits(ARCSStats)
+@inherits(ARCSGFStats)
 @inherits(MapContigsMegabubbles)
 @inherits(AbyssBloomBuild)
 class Wrapper(luigi.WrapperTask):
@@ -1532,7 +1534,7 @@ class Wrapper(luigi.WrapperTask):
                 pass
                 yield self.clone(ScaffoldStats, K=k, soap_k=soap_k)
                 yield self.clone(ARCSStats, K=k, soap_k=soap_k)
-                yield self.clone(AbyssSealer, K=k, soap_k=soap_k)
+                yield self.clone(ARCSGFStats, K=k, soap_k=soap_k)
 
             for lib in list(self.pe_libs):
                 yield self.clone(KatCompContigs, K=k, library=lib)
