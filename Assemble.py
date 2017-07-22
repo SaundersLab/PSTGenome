@@ -12,7 +12,6 @@ from luigi.contrib import sqla
 from luigi import LocalTarget
 from luigi.file import TemporaryFile
 
-import bioluigi
 from bioluigi.decorators import requires, inherits
 from bioluigi.tasks import BWAIndex
 from bioluigi.slurm import SlurmExecutableTask, SlurmTask
@@ -393,9 +392,7 @@ class BAMtoFASTQ(CheckTargetNonEmpty, SlurmExecutableTask):
 # ------------------ Cleaned Reads -------------------------- #
 
 
-@inherits(Trimmomatic)
-@inherits(CompressLMP)
-@inherits(BAMtoFASTQ)
+@inherits(BAMtoFASTQ, Trimmomatic, CompressLMP)
 class CleanedReads(luigi.WrapperTask):
     '''The LMP, LR and the PE post-QC reads come out of different
        points in the pipeline, this task reconciles that'''
@@ -528,8 +525,7 @@ class BWAIndexContigs(BWAIndex):
 # ------------------ LMP Insert Sizes -------------------------- #
 
 
-@inherits(BWAIndexContigs)
-@inherits(CompressLMP)
+@inherits(CompressLMP, BWAIndexContigs)
 class MapContigs(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -744,9 +740,7 @@ class KatCompContigs(CheckTargetNonEmpty, SlurmExecutableTask):
                    contigs=self.input()['contigs'].path)
 
 
-@inherits(KatHist)
-@inherits(KatCompIntra)
-@inherits(KatCompInter)
+@inherits(KatCompInter, KatCompIntra, KatHist)
 class KATBatchWrapper(luigi.WrapperTask):
     '''Wrapper task to execute the per library part of the pipeline on all
         libraries in :param list lib_list:'''
@@ -843,13 +837,12 @@ class SOAPPrep(CheckTargetNonEmpty, SlurmExecutableTask):
                    k=self.soap_k)
 
 
-@inherits(LMP_process)
-@inherits(Trimmomatic)
+@inherits(CleanedReads)
 class SOAPConfig(CheckTargetNonEmpty, luigi.Task):
 
     def requires(self):
-        return {'lmp': self.clone(LMP_process),
-                'pe': {lib: self.clone(Trimmomatic, library=lib) for lib in self.pe_libs}}
+        return {'lmp': {lib: self.clone(CleanedReads, library=lib) for lib in self.lmp_libs},
+                'pe': {lib: self.clone(CleanedReads, library=lib) for lib in self.pe_libs}}
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'config.txt'))
@@ -872,8 +865,7 @@ class SOAPConfig(CheckTargetNonEmpty, luigi.Task):
                                                q2=self.input()['lmp'][lib][1].path))
 
 
-@inherits(SOAPPrep)
-@inherits(SOAPConfig)
+@requires(config=SOAPConfig, contigs=SOAPPrep)
 class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -885,10 +877,6 @@ class SOAPMap(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'SOAP', 'K' + str(self.K), 'k' + str(self.soap_k), self.prefix + '.readOnContig.gz'))
-
-    def requires(self):
-        return {'config': self.clone(SOAPConfig),
-                'contigs': self.clone(SOAPPrep)}
 
     def work_script(self):
         return '''#!/bin/bash
@@ -1012,8 +1000,7 @@ class AbyssBloomBuild(CheckTargetNonEmpty, SlurmExecutableTask):
                    output=self.output().path)
 
 
-@inherits(SOAPNremap)
-@inherits(AbyssBloomBuild)
+@inherits(AbyssBloomBuild, SOAPNremap)
 class AbyssSealer(CheckTargetNonEmpty, SlurmExecutableTask):
 
     sealer_klist = luigi.ListParameter()
@@ -1362,8 +1349,7 @@ class SupernovaMegabubbles(luigi.ExternalTask):
         return LocalTarget("/nbi/Research-Groups/JIC/Diane-Saunders/PSTGenome/supernova/1.2.0/pst88/fasta/megabubbles.fasta")
 
 
-@inherits(SupernovaMegabubbles)
-@inherits(CleanedReads)
+@requires(reads=CleanedReads, contigs=SupernovaMegabubbles)
 class KatCompSupernova(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -1372,10 +1358,6 @@ class KatCompSupernova(CheckTargetNonEmpty, SlurmExecutableTask):
         self.mem = 6000
         self.n_cpu = 6
         self.partition = "nbi-medium,tgac-medium"
-
-    def requires(self):
-        return {'reads': self.clone(CleanedReads, library=self.library),
-                'contigs': self.clone(SupernovaMegabubbles)}
 
     def output(self):
         return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'supernova', 'KAT', self.library + "-main.mx"))
@@ -1401,8 +1383,7 @@ class BWAIndexMegabubbles(BWAIndex):
     pass
 
 
-@inherits(BWAIndexMegabubbles)
-@inherits(W2RapContigger)
+@requires(reads=W2RapContigger, contigs=BWAIndexMegabubbles)
 class MapContigsMegabubbles(CheckTargetNonEmpty, SlurmExecutableTask):
 
     def __init__(self, *args, **kwargs):
@@ -1446,9 +1427,7 @@ class SupernovaPseudoHaps(luigi.ExternalTask):
 # ------------------ Wrapper Tasks -------------------------- #
 
 
-@inherits(RawFastQC)
-@inherits(TrimmedFastQC)
-@inherits(Trimmomatic)
+@requires(Trimmomatic=Trimmomatic, TrimmedFastQC=TrimmedFastQC, RawFastQC=RawFastQC)
 class PEPerLibPipeline(luigi.WrapperTask):
     '''Wrapper task that runs all tasks on a single library'''
 
@@ -1474,16 +1453,9 @@ class PEBatchWrapper(luigi.WrapperTask):
         return self.input()
 
 
-@inherits(RawFastQC)
-@inherits(CollectISMetrics)
-@inherits(CompressLMP)
+@requires(CompressLMP, RawFastQC, CollectISMetrics)
 class LMPPerLibPipeline(luigi.WrapperTask):
     '''Wrapper task that runs all tasks on a single library'''
-
-    def requires(self):
-        return [self.clone(RawFastQC),
-                self.clone(CompressLMP),
-                self.clone(CollectISMetrics)]
 
     def output(self):
         return self.input()
