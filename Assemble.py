@@ -1082,8 +1082,8 @@ class ScaffoldToContigs(CheckTargetNonEmpty, SlurmTask):
 
             contig_n = 0
             for scaf in scaffolds:
-                for cont in r.split(scaf.seq):
-                    Bio.SeqIO.write(Bio.SeqRecord.SeqRecord(id='contig_{0} {1}'.format(contig_n, scaf.id), seq=cont),
+                for cont in r.split(str(scaf.seq)):
+                    Bio.SeqIO.write(Bio.SeqRecord.SeqRecord(id='contig_{0} {1}'.format(contig_n, scaf.id), seq=Bio.Seq.Seq(cont)),
                                     fout, 'fasta')
 
 
@@ -1273,6 +1273,11 @@ class ArchitectScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
                 '''.format(fasta=self.input()['fasta'].path,
                            containment=self.input()['containment'].path,
                            output=self.output().path)
+
+
+@requires(ArchitectScaffolds)
+class ArchitectStats(AbyssFac):
+    pass
 
 # ------------------ ARCS Scaffolding  -------------------------- #
 
@@ -1497,17 +1502,10 @@ class LMPBatchWrapper(luigi.WrapperTask):
         return self.input()
 
 
-@inherits(PEBatchWrapper)
-@inherits(LMPBatchWrapper)
-@inherits(ContigStats)
-@inherits(SOAPNremap)
-@inherits(KATBatchWrapper)
-@inherits(KatCompContigs)
-@inherits(Dipspades)
-@inherits(ARCSStats)
-@inherits(ARCSGFStats)
-@inherits(MapContigsMegabubbles)
-@inherits(AbyssBloomBuild)
+@inherits(PEBatchWrapper, LMPBatchWrapper, ContigStats,
+          KATBatchWrapper, KatCompContigs, Dipspades,
+          ARCSStats, ARCSGFStats, MapContigsMegabubbles,
+          ContigsGFStats, ArchitectStats)
 class Wrapper(luigi.WrapperTask):
     library = None
     K = None
@@ -1531,10 +1529,11 @@ class Wrapper(luigi.WrapperTask):
             yield self.clone(ContigStats, K=k)
 
             for soap_k in self.soap_klist:
-                pass
                 yield self.clone(ScaffoldStats, K=k, soap_k=soap_k)
                 yield self.clone(ARCSStats, K=k, soap_k=soap_k)
                 yield self.clone(ARCSGFStats, K=k, soap_k=soap_k)
+                yield self.clone(ContigsGFStats, K=k, soap_k=soap_k)
+                yield self.clone(ArchitectStats, K=k, soap_k=soap_k)
 
             for lib in list(self.pe_libs):
                 yield self.clone(KatCompContigs, K=k, library=lib)
@@ -1554,7 +1553,7 @@ if __name__ == '__main__':
         lmp_libs = [line.rstrip() for line in lmp_libs_file if line[0] != '#']
 
     luigi.run(['Wrapper',
-               '--sealer-klist', json.dumps([200, 180, 160, 140, 120, 100, 80, 40]),
+               '--sealer-klist', json.dumps([200, 180, 160, 140]),
                '--soap-klist', json.dumps([21, 31, 51, 71, 91, ]),
                '--pe-libs', json.dumps(pe_libs),
                '--lmp-libs', json.dumps(lmp_libs)] + sys.argv[3:])
