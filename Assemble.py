@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import itertools
 import sqlalchemy
 import subprocess
@@ -76,6 +77,85 @@ class AbyssFac(sqla.CopyToTable):
             soap_k = -1
         self._rows = [[self.get_task_family()[:20]] + [self.K, soap_k] + abyss]
         return self._rows
+
+
+class BUSCO_run(CheckTargetNonEmpty, SlurmExecutableTask):
+
+    fasta = luigi.Parameter()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.partition = 'nbi-medium'
+        self.mem = 1000
+        self.n_cpu = 12
+
+    def output(self):
+        return LocalTarget(os.path.join(os.path.dirname(self.fasta), "busco", 'short_summary_busco.txt'))
+
+    def work_script(self):
+        return '''#!/bin/bash
+        mkdir {output_dir}_temp
+        source /usr/users/ga004/buntingd/FP_dev/dev/bin/activate
+        source busco-3.0
+        set -euo pipefail
+
+        cd {output_dir}_temp
+        run_BUSCO.py -i {input} \
+                      -m geno \
+                      -l /tgac/software/testing/busco/3.0/x86_64/datasets/Eukaryota/basidiomycota_odb9 \
+                      -o busco \
+                      --force \
+                      --cpu {n_cpu} \
+
+
+        mv {output_dir}_temp/run_busco/* {output_dir}
+        rm -r {output_dir}_temp
+        '''.format(input=self.fasta,
+                   output_dir=os.path.dirname(self.output().path),
+                   n_cpu=self.n_cpu)
+
+
+class BUSCO(sqla.CopyToTable):
+    columns = [
+        (["Task", sqlalchemy.String(20)], {}),
+        (["K", sqlalchemy.INTEGER], {}),
+        (["soap_k", sqlalchemy.INTEGER], {}),
+        (["Complete", sqlalchemy.FLOAT], {}),
+        (["SingleCopy", sqlalchemy.FLOAT], {}),
+        (["Duplicated", sqlalchemy.FLOAT], {}),
+        (["Fragmented", sqlalchemy.FLOAT], {}),
+        (["Missing", sqlalchemy.FLOAT], {}),
+        (["Total", sqlalchemy.INTEGER], {}),
+        (["path", sqlalchemy.String(500)], {})
+    ]
+
+    connection_string = "mysql+pymysql://tgac:tgac_bioinf@tgac-db1.hpccluster/buntingd_pstgenome"
+    table = "busco"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def run(self, *args, **kwargs):
+        self.busco_file = yield self.clone(BUSCO_run, fasta=self.input().path)
+        super().run(*args, **kwargs)
+
+    def get_busco(self):
+        busco_re = re.compile(".*C:(\S+)%\[S:(\S+)%,D:(\S+)%\],F:(\S+)%,M:(\S+)%,n:(\S+).*", re.DOTALL)
+        with self.busco_file.open('r') as f:
+            lines = f.read()
+        busco = busco_re.match(lines).groups()
+        return list(map(float, busco))
+
+    def rows(self):
+        busco = self.get_busco()
+        try:
+            soap_k = self.soap_k
+        except AttributeError:
+            soap_k = -1
+        self._rows = [[self.get_task_family()[:20]] + [self.K, soap_k] + busco + [self.input().path]]
+        return self._rows
+
 
 # ------------------ Shared QC -------------------------- #
 
@@ -514,6 +594,11 @@ class Dipspades(CheckTargetNonEmpty, SlurmExecutableTask):
 
 @requires(W2RapContigger)
 class ContigStats(AbyssFac):
+    pass
+
+
+@requires(W2RapContigger)
+class ContigBUSCO(BUSCO):
     pass
 
 
@@ -1079,6 +1164,11 @@ class ContigsGFStats(AbyssFac):
     pass
 
 
+@requires(ScaffoldToContigs)
+class ContigGFBUSCO(BUSCO):
+    pass
+
+
 @requires(AbyssSealer)
 class BWAIndexGFScaffolds(BWAIndex):
     pass
@@ -1167,7 +1257,7 @@ class BamToContainment(CheckTargetNonEmpty, SlurmTask):
         # Set the SLURM request params for this task
         self.mem = 8000
         self.n_cpu = 1
-        self.partition = "nbi-short"
+        self.partition = "nbi-medium"
 
         self.threshold = 10  # The minimum number of reads per barcode
 
@@ -1242,24 +1332,27 @@ class ArchitectScaffolds(CheckTargetNonEmpty, SlurmExecutableTask):
         self.partition = "nbi-medium"
 
     def output(self):
-        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'architect', 'SOAP' + str(self.soap_k), "K" + str(self.K), 'architect'))
+        return LocalTarget(os.path.join(self.base_dir, PIPELINE, VERSION, 'architect', 'SOAP' + str(self.soap_k), "K" + str(self.K), "architect.fasta"))
 
     def work_script(self):
 
         return '''#!/bin/bash
                source /usr/users/ga004/buntingd/FP_dev/misc/python2.7/bin/activate
+               mkdir {output_dir}/temp
                set -euo pipefail
 
                 python /usr/users/ga004/buntingd/architect/architect.py scaffold \
                 --fasta {fasta} \
                 --containment {containment} \
-                --out {output} \
+                --out {output_dir}/temp/architect \
+                --rc-abs-thr 1 \
                 #--edges EDGES]
 
+                mv {output_dir}/temp/* {output_dir}
 
                 '''.format(fasta=self.input()['fasta'].path,
                            containment=self.input()['containment'].path,
-                           output=self.output().path)
+                           output_dir=os.path.dirname(self.output().path))
 
 
 @requires(ArchitectScaffolds)
@@ -1499,12 +1592,14 @@ class Wrapper(luigi.WrapperTask):
 
         for k in self.K_list:
             yield self.clone(ContigStats, K=k)
+            yield self.clone(ContigBUSCO, K=k)
 
             for soap_k in self.soap_klist:
                 yield self.clone(ScaffoldStats, K=k, soap_k=soap_k)
                 yield self.clone(ARCSStats, K=k, soap_k=soap_k)
                 yield self.clone(ARCSGFStats, K=k, soap_k=soap_k)
                 yield self.clone(ContigsGFStats, K=k, soap_k=soap_k)
+                yield self.clone(ContigGFBUSCO, K=k, soap_k=soap_k)
                 yield self.clone(ArchitectStats, K=k, soap_k=soap_k)
 
             for lib in list(self.pe_libs):
@@ -1526,6 +1621,6 @@ if __name__ == '__main__':
 
     luigi.run(['Wrapper',
                '--sealer-klist', json.dumps([200, 180, 160, 140]),
-               '--soap-klist', json.dumps([21, 31, 51, 71, 91, ]),
+               '--soap-klist', json.dumps([21, 31, 51, 71, 91, 95]),
                '--pe-libs', json.dumps(pe_libs),
                '--lmp-libs', json.dumps(lmp_libs)] + sys.argv[3:])
